@@ -215,6 +215,7 @@ def main() -> None:
 
     subparsers.add_parser("summary", help="Résumé du cache local")
     subparsers.add_parser("analyze", help="Analyse + graphes + rapport JSON")
+    subparsers.add_parser("bot", help="Démarre le bot Discord")
 
     ask_parser = subparsers.add_parser("ask", help="Question libre au coach")
     ask_parser.add_argument("question", type=str, help="Ta question entre guillemets")
@@ -238,6 +239,9 @@ def main() -> None:
         cmd_ask(args.question)
     elif args.command == "plan":
         cmd_plan(days=args.days)
+    elif args.command == "bot":
+        from ai_coach.bot import run_bot
+        run_bot()
 
 
 if __name__ == "__main__":
