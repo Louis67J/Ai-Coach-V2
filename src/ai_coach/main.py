@@ -15,6 +15,11 @@ import sys
 from ai_coach.config import load_config
 from ai_coach.intervals import load_cached_activities, refresh_cache
 
+import json
+
+from ai_coach.analysis import build_daily_tss, build_report, compute_fitness, compute_weekly_load, filter_usable
+from ai_coach.charts import plot_fitness, plot_sport_breakdown, plot_weekly_load
+from ai_coach.config import OUTPUTS_DIR
 
 def cmd_check() -> None:
     """Vérifie que la config est chargeable."""
@@ -92,6 +97,64 @@ def cmd_summary() -> None:
         print(f"  ... et {len(usable) - 15} autres exploitables")
 
 
+def cmd_analyze() -> None:
+    """Analyse le cache et génère rapport + graphes."""
+    from ai_coach.intervals import load_cached_activities
+
+    activities = load_cached_activities()
+    if not activities:
+        print("❌ Aucun cache trouvé. Lance d'abord: python -m ai_coach.main refresh")
+        sys.exit(1)
+
+    print("🧠 Analyse en cours...")
+    report = build_report(activities)
+
+    # Graphes
+    usable = filter_usable(activities)
+    daily_tss = build_daily_tss(usable)
+    fitness_df = compute_fitness(daily_tss)
+    weekly = compute_weekly_load(daily_tss)
+
+    charts_generated = []
+    for path in [
+        plot_fitness(fitness_df),
+        plot_weekly_load(weekly),
+        plot_sport_breakdown(report["sport_breakdown"]),
+    ]:
+        if path:
+            charts_generated.append(path.name)
+
+    # Sauvegarde du rapport JSON
+    report_path = OUTPUTS_DIR / "report.json"
+    report_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    # Affichage synthétique
+    print("=" * 60)
+    print(f"📊 Activités analysées: {report['period']['activities_usable']} "
+          f"(sur {report['period']['activities_total']} au total)")
+    totals = report["totals_usable"]
+    print(f"   {totals['total_hours']}h  •  {totals['total_km']}km  •  {totals['count']} séances")
+
+    cf = report["current_fitness"]
+    if cf:
+        print(f"\n🏋️  Forme actuelle (au {cf['as_of']}):")
+        print(f"   CTL (forme) = {cf['ctl']}")
+        print(f"   ATL (fatigue) = {cf['atl']}")
+        print(f"   TSB (fraîcheur) = {cf['tsb']}")
+
+    if report["recent_weekly_load"]:
+        print(f"\n📅 Charge des 4 dernières semaines:")
+        for w in report["recent_weekly_load"]:
+            print(f"   Semaine du {w['week_ending']}: {w['tss']:>4.0f} TSS")
+
+    print(f"\n💾 Rapport écrit: {report_path}")
+    if charts_generated:
+        print(f"📈 Graphes générés dans outputs/: {', '.join(charts_generated)}")
+    print("=" * 60)
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="ai-coach")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -100,10 +163,11 @@ def main() -> None:
 
     refresh_parser = subparsers.add_parser("refresh", help="Fetch Intervals.icu")
     refresh_parser.add_argument(
-        "--days", type=int, default=30, help="Nombre de jours à fetcher (défaut: 30)"
+        "--days", type=int, default=180, help="Nombre de jours à fetcher (défaut: 180)"
     )
 
     subparsers.add_parser("summary", help="Résumé du cache local")
+    subparsers.add_parser("analyze", help="Analyse + graphes + rapport JSON")
 
     args = parser.parse_args()
 
@@ -113,6 +177,8 @@ def main() -> None:
         cmd_refresh(days=args.days)
     elif args.command == "summary":
         cmd_summary()
+    elif args.command == "analyze":
+        cmd_analyze()
 
 
 if __name__ == "__main__":
