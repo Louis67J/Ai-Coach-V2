@@ -1,0 +1,13 @@
+[project]
+name = "ai-coach"
+version = "0.1.0"
+description = "Personal AI cycling coach connected to Intervals.icu and Discord"
+requires-python = ">=3.12"
+readme = "README.md"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
