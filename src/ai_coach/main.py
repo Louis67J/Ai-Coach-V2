@@ -21,6 +21,8 @@ from ai_coach.analysis import build_daily_tss, build_report, compute_fitness, co
 from ai_coach.charts import plot_fitness, plot_sport_breakdown, plot_weekly_load
 from ai_coach.config import OUTPUTS_DIR
 
+from ai_coach.coach import ask_coach, generate_plan
+
 def cmd_check() -> None:
     """Vérifie que la config est chargeable."""
     print("🚴 AI Coach v2 — Check de la configuration")
@@ -155,6 +157,51 @@ def cmd_analyze() -> None:
         print(f"📈 Graphes générés dans outputs/: {', '.join(charts_generated)}")
     print("=" * 60)
 
+def cmd_ask(question: str) -> None:
+    """Pose une question libre au coach."""
+    from ai_coach.intervals import load_cached_activities
+    from ai_coach.analysis import build_report
+
+    activities = load_cached_activities()
+    if not activities:
+        print("❌ Aucun cache. Lance d'abord: python -m ai_coach.main refresh")
+        sys.exit(1)
+
+    print("🧠 Interrogation du coach...\n")
+    try:
+        report = build_report(activities)
+        answer = ask_coach(question, report)
+    except Exception as e:
+        print(f"❌ Erreur: {e}")
+        sys.exit(1)
+
+    print("=" * 60)
+    print(answer)
+    print("=" * 60)
+
+
+def cmd_plan(days: int) -> None:
+    """Génère un plan d'entraînement pour les N prochains jours."""
+    from ai_coach.intervals import load_cached_activities
+    from ai_coach.analysis import build_report
+
+    activities = load_cached_activities()
+    if not activities:
+        print("❌ Aucun cache. Lance d'abord: python -m ai_coach.main refresh")
+        sys.exit(1)
+
+    print(f"🧠 Génération d'un plan {days} jours...\n")
+    try:
+        report = build_report(activities)
+        plan = generate_plan(report, horizon_days=days)
+    except Exception as e:
+        print(f"❌ Erreur: {e}")
+        sys.exit(1)
+
+    print("=" * 60)
+    print(plan)
+    print("=" * 60)
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="ai-coach")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -169,6 +216,14 @@ def main() -> None:
     subparsers.add_parser("summary", help="Résumé du cache local")
     subparsers.add_parser("analyze", help="Analyse + graphes + rapport JSON")
 
+    ask_parser = subparsers.add_parser("ask", help="Question libre au coach")
+    ask_parser.add_argument("question", type=str, help="Ta question entre guillemets")
+
+    plan_parser = subparsers.add_parser("plan", help="Plan d'entraînement N jours")
+    plan_parser.add_argument(
+        "--days", type=int, default=7, help="Horizon du plan (défaut: 7)"
+    )
+
     args = parser.parse_args()
 
     if args.command == "check":
@@ -179,6 +234,10 @@ def main() -> None:
         cmd_summary()
     elif args.command == "analyze":
         cmd_analyze()
+    elif args.command == "ask":
+        cmd_ask(args.question)
+    elif args.command == "plan":
+        cmd_plan(days=args.days)
 
 
 if __name__ == "__main__":
