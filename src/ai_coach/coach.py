@@ -14,6 +14,9 @@ from anthropic import Anthropic
 
 from ai_coach.config import load_config
 
+from ai_coach.profile import format_profile_for_llm, load_profile, ProfileNotFoundError
+
+from datetime import date
 
 # Modèle par défaut. Overridable via env var ANTHROPIC_MODEL.
 DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
@@ -28,44 +31,43 @@ DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
 
 SYSTEM_PROMPT = """Tu es un coach cyclisme senior, personnel et dédié à un seul athlète.
 
-Contexte sur l'athlète:
-- Cycliste amateur de bon niveau (catégorie OPEN 2)
-- Ingénieur, s'entraîne ~8-14h/semaine
-- Base à Grenoble, roule souvent dans les Alpes
-- FTP actuelle: 310W environ, poids 63.5kg (W/kg ≈ 4.8)
-- PMA actuelle: 400W 5min
+Tu reçois à chaque conversation :
+1. Le PROFIL complet de l'athlète (identité, objectifs, contraintes, préférences)
+2. Un RAPPORT D'ENTRAÎNEMENT avec ses métriques actuelles (CTL/ATL/TSB, charge récente)
+3. Une question ou une demande
 
-Ton rôle:
-- Analyser les données d'entraînement qu'on te fournit (CTL/ATL/TSB, charge hebdo, séances)
-- Donner des recommandations concrètes et actionnables
+Ton rôle :
+- Analyser les données objectives en les croisant avec le profil
+- Donner des recommandations concrètes, actionnables, adaptées à CET athlète
+- Respecter scrupuleusement ses contraintes (jours off, max séances intenses, sensibilités)
+- Travailler en cohérence avec ses objectifs prioritaires (A > B > C)
 - Jauger fatigue vs forme avec nuance
-- Proposer des séances spécifiques quand on te le demande (intervalles, durées, zones)
-- Conseiller sur la methode de bloc et quels blocs choisir.
-- Parler nutrition et récupération quand c'est pertinent
+- Proposer des séances précises (durée, intensité cible en W ou %FTP, structure d'intervalles)
+- Parler nutrition et récupération quand pertinent
 
-Ton style:
-- Tutoies l'athlète
+Style :
+- Tutoie l'athlète, par son prénom
 - Réponses en français, concises mais substantielles
-- Structure claire quand c'est utile (listes, sections courtes)
-- Pas de blabla d'introduction, tu vas droit au but
-- Quand tu cites un chiffre, tu expliques pourquoi il compte
-- Quand tu manques de données pour répondre, tu le dis explicitement
+- Structure claire (sections courtes, listes quand utile)
+- Pas de blabla d'introduction, va droit au but
+- Quand tu cites un chiffre, explique son sens
+- Quand tu manques de données, dis-le explicitement
+- Adapte tes propositions à la date du jour et aux indisponibilités connues
 
-Limites importantes:
-- Tu n'es pas médecin. Pour toute douleur, fatigue anormale ou symptôme,
-  tu rappelles de consulter un professionnel de santé.
-- Tu reconnais l'incertitude inhérente à l'entraînement.
+Limites :
+- Tu n'es pas médecin. Pour toute douleur ou symptôme inquiétant, recommande un professionnel de santé.
+- Pour les sensibilités musculaires connues, tu intègres systématiquement de la prévention.
 - Tu ne prescris JAMAIS de suppléments ou médicaments.
 
-Métriques - rappel des conventions TrainingPeaks que tu utilises:
-- CTL (Chronic Training Load): forme long terme, lissage 42j
-- ATL (Acute Training Load): fatigue court terme, lissage 7j
-- TSB (Training Stress Balance) = CTL - ATL: forme/fraîcheur
-  * TSB > +5: reposé (sous-chargé si durable)
-  * TSB 0 à +5: frais
-  * TSB -10 à 0: en charge productive
-  * TSB -20 à -10: chargé, surveillance
-  * TSB < -20: surcharge
+Métriques (conventions TrainingPeaks) :
+- CTL (42j) : forme long terme
+- ATL (7j) : fatigue court terme
+- TSB = CTL - ATL : fraîcheur
+  * TSB > +5 : reposé (sous-chargé si durable)
+  * TSB 0 à +5 : frais
+  * TSB -10 à 0 : charge productive
+  * TSB -20 à -10 : chargé, surveillance
+  * TSB < -20 : surcharge
 """
 
 
@@ -80,25 +82,29 @@ def _client() -> Anthropic:
 def _format_report_for_llm(report: dict[str, Any]) -> str:
     """
     Transforme le rapport d'analyse en texte lisible pour Claude.
-    On pourrait passer le JSON brut, mais un format humain améliore la qualité
-    des réponses et réduit les tokens.
     """
     lines = []
-    lines.append(f"=== Rapport d'entraînement (généré le {report.get('generated_at', '?')[:10]}) ===\n")
+
+    # Ancrage temporel explicite
+    today = report.get("today", "?")
+    weekday = report.get("today_weekday", "?")
+    lines.append(f"=== CONTEXTE TEMPOREL ===")
+    lines.append(f"Aujourd'hui : {weekday} {today}")
+
+    lines.append(f"\n=== RAPPORT D'ENTRAÎNEMENT ===\n")
 
     period = report.get("period", {})
     lines.append(
         f"Période analysée: {period.get('activities_usable', 0)} activités exploitables "
-        f"(sur {period.get('activities_total', 0)} au total, "
-        f"{period.get('activities_stubs', 0)} stubs Strava ignorés)"
+        f"sur {period.get('activities_total', 0)} ({period.get('stub_pct', 0):.0f}% de stubs Strava ignorés). "
+        f"⚠️ Les CTL/ATL/TSB sont sous-estimés dans cette proportion."
     )
 
     totals = report.get("totals_usable", {})
     if totals:
         lines.append(
-            f"Totaux: {totals.get('total_hours', 0)}h, "
-            f"{totals.get('total_km', 0)}km, "
-            f"{totals.get('count', 0)} séances"
+            f"Totaux exploitables : {totals.get('total_hours', 0)}h, "
+            f"{totals.get('total_km', 0)}km, {totals.get('count', 0)} séances"
         )
 
     cf = report.get("current_fitness", {})
@@ -110,13 +116,34 @@ def _format_report_for_llm(report: dict[str, Any]) -> str:
 
     weekly = report.get("recent_weekly_load", [])
     if weekly:
-        lines.append("\nCharge hebdomadaire récente:")
+        lines.append("\nCharge hebdomadaire récente :")
         for w in weekly:
-            lines.append(f"  Semaine du {w.get('week_ending', '?')}: {w.get('tss', 0):.0f} TSS")
+            status = w.get("status", "")
+            status_str = f" [{status}]" if status else ""
+            lines.append(f"  Semaine du {w.get('week_ending', '?')}: {w.get('tss', 0):.0f} TSS{status_str}")
+
+    daily = report.get("recent_daily_log", [])
+    if daily:
+        lines.append("\nDétail des 14 derniers jours (jour par jour) :")
+        for day in daily:
+            sessions = day.get("sessions", [])
+            if not sessions:
+                lines.append(f"  {day['weekday']:9s} {day['date']} : (repos)")
+            else:
+                # Une ligne par séance du jour
+                first = True
+                for s in sessions:
+                    prefix = f"  {day['weekday']:9s} {day['date']}" if first else " " * 22
+                    lines.append(
+                        f"{prefix} : {s['type']:12s} "
+                        f"{s['duration_h']:>4.1f}h  {s['distance_km']:>5.1f}km  "
+                        f"TSS={s['tss']:>3d}  {s['name'][:40]}"
+                    )
+                    first = False
 
     breakdown = report.get("sport_breakdown", {})
     if breakdown:
-        lines.append("\nRépartition par sport (période analysée):")
+        lines.append("\nRépartition par sport (période analysée) :")
         for sport, data in breakdown.items():
             lines.append(
                 f"  {sport}: {data.get('count', 0)} séances, "
@@ -130,15 +157,28 @@ def _format_report_for_llm(report: dict[str, Any]) -> str:
 
 def ask_coach(question: str, report: dict[str, Any], max_tokens: int = 1500) -> str:
     """
-    Pose une question libre au coach en lui fournissant le contexte d'analyse.
-
-    Args:
-        question: la question en langage naturel
-        report: le dict issu de analysis.build_report()
-        max_tokens: longueur max de la réponse
+    Pose une question au coach avec profil + contexte d'analyse + question.
     """
-    context = _format_report_for_llm(report)
-    user_message = f"{context}\n\n=== Ma question ===\n{question}"
+    # Profil athlète (obligatoire)
+    try:
+        profile = load_profile()
+        profile_text = format_profile_for_llm(profile)
+    except ProfileNotFoundError as e:
+        # Le coach peut tourner sans profil mais on informe l'utilisateur
+        profile_text = "(Aucun profil athlète défini — réponses génériques)"
+
+    # Rapport d'analyse
+    report_text = _format_report_for_llm(report)
+
+    # Date du jour pour ancrer les recos temporellement
+    today = date.today().isoformat()
+
+    user_message = (
+        f"Date du jour : {today}\n\n"
+        f"{profile_text}\n\n"
+        f"{report_text}\n\n"
+        f"=== Ma question ===\n{question}"
+    )
 
     client = _client()
     response = client.messages.create(
@@ -148,8 +188,6 @@ def ask_coach(question: str, report: dict[str, Any], max_tokens: int = 1500) -> 
         messages=[{"role": "user", "content": user_message}],
     )
 
-    # Le SDK renvoie une liste de content blocks (pour supporter outils/images)
-    # Pour du texte simple on concatène le texte de tous les blocs de type "text"
     parts = [block.text for block in response.content if block.type == "text"]
     return "\n".join(parts).strip()
 

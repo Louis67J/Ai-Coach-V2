@@ -118,6 +118,10 @@ async def help_coach(ctx: commands.Context) -> None:
         "`!stats` — résumé rapide de ta forme\n"
         "`!refresh` — re-fetch Intervals.icu (fais-le après une sortie)\n"
         "`!fitness` — envoie le graphe CTL/ATL/TSB\n"
+        "`!profile` — affiche ton profil athlète\n"
+        "`!set_ftp <W>` — met à jour ta FTP\n"
+        "`!set_weight <kg>` — met à jour ton poids\n"
+        "`!add_note <texte>` — ajoute une note de contexte\n"
         "`!help_coach` — cette aide\n"
     )
     await ctx.send(text)
@@ -239,6 +243,61 @@ async def cmd_fitness(ctx: commands.Context) -> None:
         return
 
     await ctx.send(file=discord.File(str(path)))
+
+@bot.command(name="profile")
+async def cmd_profile(ctx: commands.Context) -> None:
+    """Affiche le profil athlète actuel."""
+    from ai_coach.profile import format_profile_for_llm, load_profile, ProfileNotFoundError
+    try:
+        profile = load_profile()
+    except ProfileNotFoundError as e:
+        await ctx.send(str(e))
+        return
+    text = format_profile_for_llm(profile)
+    await send_long(ctx, "```\n" + text + "\n```")
+
+
+@bot.command(name="set_ftp")
+async def cmd_set_ftp(ctx: commands.Context, ftp: int) -> None:
+    """Met à jour la FTP. Usage: !set_ftp 320"""
+    from datetime import date as _date
+    from ai_coach.profile import update_field
+    if ftp < 100 or ftp > 600:
+        await ctx.send("❌ FTP improbable, vérifie ta valeur (attendu : 100-600 W).")
+        return
+    update_field(["athlete", "ftp_watts"], ftp)
+    update_field(["athlete", "ftp_updated"], _date.today().isoformat())
+    await ctx.send(f"✅ FTP mise à jour : {ftp}W (test daté d'aujourd'hui)")
+
+
+@bot.command(name="set_weight")
+async def cmd_set_weight(ctx: commands.Context, weight: float) -> None:
+    """Met à jour le poids actuel. Usage: !set_weight 63.5"""
+    from ai_coach.profile import update_field
+    if weight < 30 or weight > 200:
+        await ctx.send("❌ Poids improbable, vérifie ta valeur.")
+        return
+    update_field(["athlete", "weight_kg"], weight)
+    await ctx.send(f"✅ Poids mis à jour : {weight}kg")
+
+
+@bot.command(name="add_note")
+async def cmd_add_note(ctx: commands.Context, *, note: str) -> None:
+    """
+    Ajoute une note dans le profil (préférences évolutives, contexte ponctuel).
+    Usage: !add_note Genou un peu chargé cette semaine, je vais lever le pied
+    """
+    from ai_coach.profile import load_profile, save_profile
+    profile = load_profile()
+    notes = profile.setdefault("running_notes", [])
+    notes.append({
+        "date": __import__("datetime").date.today().isoformat(),
+        "note": note,
+    })
+    # Limite à 30 notes pour éviter la dérive
+    profile["running_notes"] = notes[-30:]
+    save_profile(profile)
+    await ctx.send(f"✅ Note ajoutée ({len(profile['running_notes'])} notes en mémoire).")
 
 
 # --- Entry point ---

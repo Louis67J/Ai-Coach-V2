@@ -124,10 +124,64 @@ def compute_sport_breakdown(activities: list[dict]) -> dict[str, dict]:
 
 # --- Rapport complet ---
 
+def build_recent_daily_log(activities: list[dict], days: int = 14) -> list[dict]:
+    """
+    Construit une liste jour par jour des N derniers jours, avec les séances
+    de chaque jour (ou un marqueur 'repos' si rien).
+
+    Format de sortie:
+        [
+            {"date": "2026-04-15", "weekday": "mercredi", "sessions": [...]},
+            {"date": "2026-04-14", "weekday": "mardi", "sessions": []},
+            ...
+        ]
+    """
+    weekday_fr = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+
+    today = date.today()
+    start = today - timedelta(days=days - 1)
+
+    # Indexe les activités par jour
+    by_day: dict[str, list[dict]] = {}
+    for a in activities:
+        if not is_usable(a):
+            continue
+        start_local = a.get("start_date_local") or ""
+        if not start_local:
+            continue
+        day_str = start_local[:10]
+        try:
+            day_date = date.fromisoformat(day_str)
+        except ValueError:
+            continue
+        if day_date < start or day_date > today:
+            continue
+        by_day.setdefault(day_str, []).append({
+            "name": a.get("name") or "(sans nom)",
+            "type": a.get("type") or "?",
+            "duration_h": round((a.get("moving_time") or 0) / 3600, 2),
+            "distance_km": round((a.get("distance") or 0) / 1000, 1),
+            "tss": int(a.get("icu_training_load") or 0),
+        })
+
+    # Construit la timeline complète, jour par jour, du plus récent au plus ancien
+    log = []
+    cursor = today
+    while cursor >= start:
+        day_str = cursor.isoformat()
+        log.append({
+            "date": day_str,
+            "weekday": weekday_fr[cursor.weekday()],
+            "sessions": by_day.get(day_str, []),
+        })
+        cursor -= timedelta(days=1)
+
+    return log
+
 def build_report(activities: list[dict]) -> dict[str, Any]:
     """
     Construit un rapport d'analyse complet à partir des activités brutes.
-    Ce dict est sauvegardé en JSON et sera passé au LLM coach à l'étape 4.
+    Ce dict est sauvegardé en JSON et sera passé au LLM coach.
     """
     usable = filter_usable(activities)
 
@@ -135,7 +189,7 @@ def build_report(activities: list[dict]) -> dict[str, Any]:
     fitness = compute_fitness(daily_tss)
     weekly = compute_weekly_load(daily_tss)
 
-    # Valeurs de forme actuelles (dernière ligne du DF)
+    # Valeurs de forme actuelles
     current_fitness: dict[str, float] = {}
     if not fitness.empty:
         latest = fitness.iloc[-1]
@@ -146,25 +200,43 @@ def build_report(activities: list[dict]) -> dict[str, Any]:
             "as_of": fitness.index[-1].strftime("%Y-%m-%d"),
         }
 
-    # Charge des 4 dernières semaines
+    # Charge des dernières semaines, avec annotation pour la semaine en cours
     recent_weekly = []
     if not weekly.empty:
-        for week_end, tss in weekly.tail(4).items():
-            recent_weekly.append({
-                "week_ending": week_end.strftime("%Y-%m-%d"),
+        today = date.today()
+        for week_end, tss in weekly.tail(5).items():
+            week_end_date = week_end.date() if hasattr(week_end, "date") else week_end
+            entry = {
+                "week_ending": week_end_date.strftime("%Y-%m-%d"),
                 "tss": round(float(tss), 0),
-            })
+            }
+            # Si on est avant la fin de cette semaine, c'est la semaine en cours
+            if week_end_date >= today:
+                # Compte les jours écoulés dans cette semaine (lundi=jour 1)
+                week_start = week_end_date - timedelta(days=6)
+                days_done = (today - week_start).days + 1
+                entry["status"] = f"en cours, {days_done}/7 jours"
+            else:
+                entry["status"] = "complète"
+            recent_weekly.append(entry)
+
+    # Log jour par jour des 14 derniers jours
+    recent_daily = build_recent_daily_log(activities, days=14)
 
     report = {
         "generated_at": datetime.utcnow().isoformat() + "Z",
+        "today": date.today().isoformat(),
+        "today_weekday": ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"][date.today().weekday()],
         "period": {
             "activities_total": len(activities),
             "activities_usable": len(usable),
             "activities_stubs": len(activities) - len(usable),
+            "stub_pct": round(100 * (len(activities) - len(usable)) / max(len(activities), 1), 0),
         },
         "totals_usable": compute_totals(usable),
         "sport_breakdown": compute_sport_breakdown(usable),
         "current_fitness": current_fitness,
         "recent_weekly_load": recent_weekly,
+        "recent_daily_log": recent_daily,
     }
     return report
