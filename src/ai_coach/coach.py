@@ -16,7 +16,7 @@ from ai_coach.config import load_config
 
 from ai_coach.profile import format_profile_for_llm, load_profile, ProfileNotFoundError
 
-from datetime import date
+from datetime import date, timedelta
 
 # Modèle par défaut. Overridable via env var ANTHROPIC_MODEL.
 DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
@@ -79,26 +79,72 @@ def _client() -> Anthropic:
     return Anthropic(api_key=config.anthropic_api_key)
 
 
+def _build_calendar_window(profile: dict[str, Any], days_ahead: int = 14) -> str:
+    """
+    Construit une table claire des prochains jours avec annotation des
+    indispos et créneaux types. Évite à Claude de calculer les jours
+    de semaine lui-même (source d'erreurs fréquentes des LLM).
+    """
+    weekdays_fr = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+
+    # Récupère les indispos du profil
+    unavailable = set(
+        profile.get("context", {}).get("unavailable_dates", [])
+    )
+
+    # Récupère les créneaux types par jour de semaine
+    schedule = profile.get("context", {}).get("typical_schedule", {})
+
+    today = date.today()
+    lines = ["=== AGENDA DES 14 PROCHAINS JOURS ==="]
+    lines.append("(table de référence : ne calcule PAS les jours de semaine toi-même, "
+                 "lis-les dans cette table)")
+    lines.append("")
+
+    for offset in range(days_ahead):
+        day = today + timedelta(days=offset)
+        day_str = day.isoformat()
+        weekday = weekdays_fr[day.weekday()]
+
+        markers = []
+        if offset == 0:
+            markers.append("AUJOURD'HUI")
+        if day_str in unavailable:
+            markers.append("INDISPONIBLE (vélo impossible)")
+        if weekday == "lundi" and "monday" in schedule:
+            markers.append(f"({schedule['monday']})")
+
+        marker_str = "  ← " + " | ".join(markers) if markers else ""
+        lines.append(f"  {weekday:9s} {day_str}{marker_str}")
+
+    return "\n".join(lines)
+
 def _format_report_for_llm(report: dict[str, Any]) -> str:
     """
     Transforme le rapport d'analyse en texte lisible pour Claude.
     """
     lines = []
 
-    # Ancrage temporel explicite
-    today = report.get("today", "?")
-    weekday = report.get("today_weekday", "?")
-    lines.append(f"=== CONTEXTE TEMPOREL ===")
-    lines.append(f"Aujourd'hui : {weekday} {today}")
-
-    lines.append(f"\n=== RAPPORT D'ENTRAÎNEMENT ===\n")
+    lines.append(f"=== RAPPORT D'ENTRAÎNEMENT ===\n")
 
     period = report.get("period", {})
+    stub_pct = period.get("stub_pct", 0)
     lines.append(
         f"Période analysée: {period.get('activities_usable', 0)} activités exploitables "
-        f"sur {period.get('activities_total', 0)} ({period.get('stub_pct', 0):.0f}% de stubs Strava ignorés). "
-        f"⚠️ Les CTL/ATL/TSB sont sous-estimés dans cette proportion."
+        f"sur {period.get('activities_total', 0)} au total."
     )
+    if stub_pct > 0:
+        lines.append("")
+        lines.append(
+            f"⚠️ IMPORTANT — {stub_pct:.0f}% des activités sont des 'stubs Strava' : "
+            f"l'athlète les a BIEN EFFECTUÉES, mais leurs détails ne sont pas accessibles "
+            f"via cette API (limitation Strava côté API Intervals.icu). "
+            f"Ces activités ne reflètent PAS un manque de consistance — l'athlète s'entraîne "
+            f"davantage que les chiffres ci-dessous ne le montrent. "
+            f"Les CTL/ATL/TSB sont mécaniquement sous-estimés. "
+            f"N'interprète JAMAIS la part 'stubs' comme un signal d'inconsistance "
+            f"ou de manque de motivation."
+        )
 
     totals = report.get("totals_usable", {})
     if totals:
@@ -116,11 +162,15 @@ def _format_report_for_llm(report: dict[str, Any]) -> str:
 
     weekly = report.get("recent_weekly_load", [])
     if weekly:
-        lines.append("\nCharge hebdomadaire récente :")
+        lines.append("\nCharge hebdomadaire récente "
+                     "(une semaine = lundi → dimanche, étiquetée par sa date de fin) :")
         for w in weekly:
             status = w.get("status", "")
             status_str = f" [{status}]" if status else ""
-            lines.append(f"  Semaine du {w.get('week_ending', '?')}: {w.get('tss', 0):.0f} TSS{status_str}")
+            lines.append(
+                f"  Semaine se terminant le {w.get('week_ending', '?')}: "
+                f"{w.get('tss', 0):.0f} TSS{status_str}"
+            )
 
     daily = report.get("recent_daily_log", [])
     if daily:
@@ -157,25 +207,26 @@ def _format_report_for_llm(report: dict[str, Any]) -> str:
 
 def ask_coach(question: str, report: dict[str, Any], max_tokens: int = 1500) -> str:
     """
-    Pose une question au coach avec profil + contexte d'analyse + question.
+    Pose une question au coach avec profil + calendrier + contexte d'analyse + question.
     """
-    # Profil athlète (obligatoire)
+    # Profil athlète (obligatoire pour personnalisation)
     try:
         profile = load_profile()
         profile_text = format_profile_for_llm(profile)
-    except ProfileNotFoundError as e:
-        # Le coach peut tourner sans profil mais on informe l'utilisateur
+    except ProfileNotFoundError:
+        profile = {}
         profile_text = "(Aucun profil athlète défini — réponses génériques)"
+
+    # Calendrier explicite des prochains jours (croise dates + indispos du profil)
+    # Crucial : sans ça, le LLM se trompe régulièrement sur les jours de semaine.
+    calendar_text = _build_calendar_window(profile, days_ahead=14)
 
     # Rapport d'analyse
     report_text = _format_report_for_llm(report)
 
-    # Date du jour pour ancrer les recos temporellement
-    today = date.today().isoformat()
-
     user_message = (
-        f"Date du jour : {today}\n\n"
         f"{profile_text}\n\n"
+        f"{calendar_text}\n\n"
         f"{report_text}\n\n"
         f"=== Ma question ===\n{question}"
     )
