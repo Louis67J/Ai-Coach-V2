@@ -113,7 +113,7 @@ async def help_coach(ctx: commands.Context) -> None:
     """Affiche l'aide du bot coach."""
     text = (
         "**🚴 AI Coach — commandes**\n"
-        "`!ask <question>` — pose une question au coach\n"
+        "`!ask <question>` — pose une question au coach (avec mémoire)\n"
         "`!plan [jours]` — plan d'entraînement (défaut 7)\n"
         "`!stats` — résumé rapide de ta forme\n"
         "`!refresh` — re-fetch Intervals.icu (fais-le après une sortie)\n"
@@ -121,7 +121,10 @@ async def help_coach(ctx: commands.Context) -> None:
         "`!profile` — affiche ton profil athlète\n"
         "`!set_ftp <W>` — met à jour ta FTP\n"
         "`!set_weight <kg>` — met à jour ton poids\n"
-        "`!add_note <texte>` — ajoute une note de contexte\n"
+        "`!add_note <texte>` — ajoute une note de contexte au profil\n"
+        "`!history [n]` — affiche les n derniers échanges (défaut 5)\n"
+        "`!forget yes` — efface toute la mémoire\n"
+        "`!forget_last` — supprime le dernier échange\n"
         "`!help_coach` — cette aide\n"
     )
     await ctx.send(text)
@@ -170,16 +173,24 @@ async def cmd_ask(ctx: commands.Context, *, question: str) -> None:
         await ctx.send(result)
         return
 
+    metadata = {
+        "discord_user": str(ctx.author),
+        "discord_channel": str(ctx.channel),
+    }
+
     async with ctx.typing():
         try:
-            answer = ask_coach(question, result)
+            answer = ask_coach(
+                question, result,
+                source="discord",
+                metadata=metadata,
+            )
         except Exception as e:
             log.exception("ask_coach failed")
             await ctx.send(f"❌ Le coach n'a pas pu répondre : {e}")
             return
 
     await send_long(ctx, answer)
-
 
 @bot.command(name="plan")
 async def cmd_plan(ctx: commands.Context, days: int = 7) -> None:
@@ -193,16 +204,25 @@ async def cmd_plan(ctx: commands.Context, days: int = 7) -> None:
         await ctx.send(result)
         return
 
+    metadata = {
+        "discord_user": str(ctx.author),
+        "discord_channel": str(ctx.channel),
+    }
+
     async with ctx.typing():
         try:
-            plan_text = generate_plan(result, horizon_days=days)
+            plan_text = generate_plan(
+                result,
+                horizon_days=days,
+                source="discord",
+                metadata=metadata,
+            )
         except Exception as e:
             log.exception("generate_plan failed")
             await ctx.send(f"❌ Erreur : {e}")
             return
 
     await send_long(ctx, plan_text)
-
 
 @bot.command(name="refresh")
 async def cmd_refresh(ctx: commands.Context, days: int = 180) -> None:
@@ -255,6 +275,45 @@ async def cmd_profile(ctx: commands.Context) -> None:
         return
     text = format_profile_for_llm(profile)
     await send_long(ctx, "```\n" + text + "\n```")
+
+@bot.command(name="history")
+async def cmd_history(ctx: commands.Context, n: int = 5) -> None:
+    """Affiche les N derniers échanges en mémoire (défaut 5)."""
+    from ai_coach.memory import count_exchanges, format_recent_for_display
+    if n < 1 or n > 20:
+        await ctx.send("Choisis entre 1 et 20.")
+        return
+    total = count_exchanges()
+    text = format_recent_for_display(limit=n)
+    header = f"🧠 **Mémoire** — {total} échange(s) au total, {min(n, total)} affiché(s) :\n"
+    await send_long(ctx, header + "```\n" + text + "\n```")
+
+
+@bot.command(name="forget")
+async def cmd_forget(ctx: commands.Context, confirm: str = "") -> None:
+    """
+    Efface toute la mémoire conversationnelle.
+    Usage: !forget yes (le mot 'yes' est obligatoire pour confirmer)
+    """
+    if confirm.lower() != "yes":
+        await ctx.send(
+            "⚠️ Cette commande efface tous les échanges en mémoire.\n"
+            "Pour confirmer, retape : `!forget yes`"
+        )
+        return
+    from ai_coach.memory import clear_all
+    n = clear_all()
+    await ctx.send(f"🧹 Mémoire effacée ({n} échanges supprimés).")
+
+
+@bot.command(name="forget_last")
+async def cmd_forget_last(ctx: commands.Context) -> None:
+    """Supprime le dernier échange de la mémoire (utile si Claude a déraillé)."""
+    from ai_coach.memory import remove_last
+    if remove_last():
+        await ctx.send("🧹 Dernier échange supprimé.")
+    else:
+        await ctx.send("(Rien à supprimer, mémoire vide.)")
 
 
 @bot.command(name="set_ftp")

@@ -18,6 +18,8 @@ from ai_coach.profile import format_profile_for_llm, load_profile, ProfileNotFou
 
 from datetime import date, timedelta
 
+from ai_coach.memory import append_exchange, load_recent_exchanges, to_anthropic_messages
+
 # Modèle par défaut. Overridable via env var ANTHROPIC_MODEL.
 DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
 
@@ -205,11 +207,28 @@ def _format_report_for_llm(report: dict[str, Any]) -> str:
 
 # --- Interfaces publiques ---
 
-def ask_coach(question: str, report: dict[str, Any], max_tokens: int = 1500) -> str:
+def ask_coach(
+    question: str,
+    report: dict[str, Any],
+    max_tokens: int = 1500,
+    source: str = "cli",
+    metadata: dict[str, Any] | None = None,
+    history_limit: int = 20,
+    persist: bool = True,
+) -> str:
     """
-    Pose une question au coach avec profil + calendrier + contexte d'analyse + question.
+    Pose une question au coach avec profil + calendrier + rapport + historique conversationnel.
+
+    Args:
+        question: la question
+        report: dict d'analyse
+        max_tokens: longueur max de la réponse
+        source: "cli" ou "discord" (pour traçage)
+        metadata: contexte additionnel à logger (user, channel...)
+        history_limit: nombre d'échanges précédents à charger en contexte
+        persist: si True, sauvegarde l'échange dans la mémoire après réponse
     """
-    # Profil athlète (obligatoire pour personnalisation)
+    # Profil athlète
     try:
         profile = load_profile()
         profile_text = format_profile_for_llm(profile)
@@ -217,40 +236,71 @@ def ask_coach(question: str, report: dict[str, Any], max_tokens: int = 1500) -> 
         profile = {}
         profile_text = "(Aucun profil athlète défini — réponses génériques)"
 
-    # Calendrier explicite des prochains jours (croise dates + indispos du profil)
-    # Crucial : sans ça, le LLM se trompe régulièrement sur les jours de semaine.
+    # Calendrier explicite
     calendar_text = _build_calendar_window(profile, days_ahead=14)
 
     # Rapport d'analyse
     report_text = _format_report_for_llm(report)
 
-    user_message = (
+    # Historique conversationnel précédent
+    history = load_recent_exchanges(limit=history_limit)
+    history_messages = to_anthropic_messages(history)
+
+    # Construction du dernier message user :
+    # contexte fraîchement calculé + question
+    current_user_message = (
         f"{profile_text}\n\n"
         f"{calendar_text}\n\n"
         f"{report_text}\n\n"
         f"=== Ma question ===\n{question}"
     )
 
+    # Liste finale de messages : historique passé + question actuelle
+    messages = history_messages + [
+        {"role": "user", "content": current_user_message}
+    ]
+
     client = _client()
     response = client.messages.create(
         model=DEFAULT_MODEL,
         max_tokens=max_tokens,
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_message}],
+        messages=messages,
     )
 
     parts = [block.text for block in response.content if block.type == "text"]
-    return "\n".join(parts).strip()
+    answer = "\n".join(parts).strip()
 
+    # Sauvegarde l'échange. On ne stocke QUE la question brute (pas tout le
+    # contexte injecté), parce que celui-ci est régénéré frais à chaque appel.
+    if persist:
+        append_exchange(
+            question=question,
+            answer=answer,
+            source=source,
+            metadata=metadata,
+        )
 
-def generate_plan(report: dict[str, Any], horizon_days: int = 7) -> str:
+    return answer
+
+def generate_plan(
+    report: dict[str, Any],
+    horizon_days: int = 10,
+    source: str = "cli",
+    metadata: dict[str, Any] | None = None,
+) -> str:
     """
     Demande au coach un plan d'entraînement structuré pour les N prochains jours.
     """
     question = (
         f"Propose-moi un plan d'entraînement pour les {horizon_days} prochains jours, "
-        f"basé sur mon état de forme actuel. "
+        f"basé sur mon état de forme actuel et nos discussions précédentes si pertinent. "
         f"Pour chaque jour: type de séance, durée, intensité cible, et une phrase sur l'objectif. "
         f"Termine par 2-3 phrases sur la logique globale du bloc."
     )
-    return ask_coach(question, report, max_tokens=2000)
+    return ask_coach(
+        question, report,
+        max_tokens=2000,
+        source=source,
+        metadata=metadata,
+    )
