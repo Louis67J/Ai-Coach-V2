@@ -125,6 +125,7 @@ async def help_coach(ctx: commands.Context) -> None:
         "`!history [n]` — affiche les n derniers échanges (défaut 5)\n"
         "`!forget yes` — efface toute la mémoire\n"
         "`!forget_last` — supprime le dernier échange\n"
+        "`!enrich [max]` — enrichit les séances (détails + intervalles)\n"
         "`!help_coach` — cette aide\n"
     )
     await ctx.send(text)
@@ -339,6 +340,21 @@ async def cmd_set_weight(ctx: commands.Context, weight: float) -> None:
     update_field(["athlete", "weight_kg"], weight)
     await ctx.send(f"✅ Poids mis à jour : {weight}kg")
 
+
+@bot.command(name="enrich")
+async def cmd_enrich(ctx: commands.Context, max_new: int = 10) -> None:
+    """Enrichit les séances avec les détails Intervals.icu."""
+    await ctx.send(f"🔬 Enrichissement en cours (max {max_new} nouvelles séances)...")
+    async with ctx.typing():
+        try:
+            activities = load_cached_activities()
+            from ai_coach.intervals import enrich_sessions
+            sessions = enrich_sessions(activities, max_new=max_new)
+        except Exception as e:
+            log.exception("enrich failed")
+            await ctx.send(f"❌ Erreur: {e}")
+            return
+    await ctx.send(f"✅ {len(sessions)} séances enrichies au total.")
 
 @bot.command(name="add_note")
 async def cmd_add_note(ctx: commands.Context, *, note: str) -> None:

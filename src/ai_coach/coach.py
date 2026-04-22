@@ -193,6 +193,46 @@ def _format_report_for_llm(report: dict[str, Any]) -> str:
                     )
                     first = False
 
+    sessions = report.get("recent_sessions", [])
+    if sessions:
+        lines.append("\nDétail des séances récentes (les plus récentes en premier) :")
+        for s in sessions:
+            tag = s.get("tag", "?")
+            name = (s.get("name") or "?")[:40]
+            np_w = s.get("np_watts") or "?"
+            if_val = s.get("intensity_factor") or "?"
+            tss = s.get("tss", 0)
+            duration_h = round((s.get("moving_time_s") or 0) / 3600, 1)
+            dist = s.get("distance_km", 0)
+            elev = s.get("elevation_gain", 0)
+            zones = s.get("zones", "")
+            hr = s.get("avg_hr") or "?"
+            dec = s.get("decoupling_pct")
+
+            lines.append(
+                f"\n  📅 {s.get('date', '?')} — {name}"
+            )
+            lines.append(
+                f"     [{tag}] {duration_h}h | {dist}km | {elev}m D+ | "
+                f"NP={np_w}W | IF={if_val} | TSS={tss} | FC moy={hr}"
+            )
+            if zones:
+                lines.append(f"     Zones: {zones}")
+            if dec is not None:
+                lines.append(f"     Découplage cardiaque: {dec:.1f}%")
+
+            pattern = s.get("interval_pattern")
+            if pattern:
+                lines.append(f"     🎯 Structure détectée : {pattern}")
+            intervals = s.get("intervals", [])
+            if intervals and not pattern:
+                # Affiche les intervalles bruts seulement si pas de pattern détecté
+                lines.append(f"     Intervalles bruts ({len(intervals)}) :")
+                for iv in intervals[:6]:
+                    lines.append(f"       • {iv}")
+                if len(intervals) > 6:
+                    lines.append(f"       ... +{len(intervals) - 6} autres")
+
     breakdown = report.get("sport_breakdown", {})
     if breakdown:
         lines.append("\nRépartition par sport (période analysée) :")

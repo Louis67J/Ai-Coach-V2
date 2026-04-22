@@ -23,6 +23,8 @@ from ai_coach.config import OUTPUTS_DIR
 
 from ai_coach.coach import ask_coach, generate_plan
 
+from ai_coach.intervals import enrich_sessions
+
 def cmd_check() -> None:
     """Vérifie que la config est chargeable."""
     print("🚴 AI Coach v2 — Check de la configuration")
@@ -202,6 +204,44 @@ def cmd_plan(days: int) -> None:
     print(plan)
     print("=" * 60)
 
+def cmd_enrich(max_new: int) -> None:
+    """Enrichit les séances avec les détails Intervals.icu."""
+    from ai_coach.intervals import load_cached_activities
+
+    activities = load_cached_activities()
+    if not activities:
+        print("❌ Aucun cache. Lance d'abord: python -m ai_coach.main refresh")
+        sys.exit(1)
+
+    print(f"🔬 Enrichissement des séances (max {max_new} nouvelles)...")
+    sessions = enrich_sessions(activities, max_new=max_new)
+    print(f"\n✨ {len(sessions)} séances enrichies au total.")
+
+    # Affiche les 5 dernières fiches pour vérif
+    recent = sorted(sessions, key=lambda s: s.get("date", ""), reverse=True)[:5]
+    print("\n📋 5 dernières séances enrichies :")
+    print("-" * 80)
+    for s in recent:
+        tag = s.get("tag", "?")
+        name = s.get("name", "?")[:35]
+        np_w = s.get("np_watts") or "?"
+        if_val = s.get("intensity_factor") or "?"
+        tss = s.get("tss", 0)
+        zones = s.get("zones", "")
+        intervals = s.get("intervals", [])
+        iv_str = f" | {len(intervals)} intervalles" if intervals else ""
+        print(
+            f"  {s.get('date', '?')}  [{tag:18s}]  "
+            f"NP={np_w}W  IF={if_val}  TSS={tss:>3}{iv_str}"
+        )
+        print(f"    {name}")
+        if intervals:
+            for iv in intervals[:4]:
+                print(f"      → {iv}")
+            if len(intervals) > 4:
+                print(f"      ... +{len(intervals)-4} autres")
+    print("-" * 80)
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="ai-coach")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -225,6 +265,12 @@ def main() -> None:
         "--days", type=int, default=7, help="Horizon du plan (défaut: 7)"
     )
 
+    enrich_parser = subparsers.add_parser("enrich", help="Enrichit les séances (détails + intervalles)")
+    enrich_parser.add_argument(
+        "--max", type=int, default=20, dest="max_new",
+        help="Max de nouvelles séances à fetcher (défaut: 20)"
+    )
+
     args = parser.parse_args()
 
     if args.command == "check":
@@ -242,6 +288,8 @@ def main() -> None:
     elif args.command == "bot":
         from ai_coach.bot import run_bot
         run_bot()
+    elif args.command == "enrich":
+        cmd_enrich(max_new=args.max_new)
 
 
 if __name__ == "__main__":

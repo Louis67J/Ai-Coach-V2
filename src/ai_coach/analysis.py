@@ -239,4 +239,15 @@ def build_report(activities: list[dict]) -> dict[str, Any]:
         "recent_weekly_load": recent_weekly,
         "recent_daily_log": recent_daily,
     }
+    # Fiches de séances enrichies (si disponibles)
+    from ai_coach.intervals import load_enriched_sessions
+    enriched = load_enriched_sessions()
+    if enriched:
+        # Trie par date, garde les 14 plus récentes
+        enriched_sorted = sorted(
+            enriched,
+            key=lambda s: s.get("date", ""),
+            reverse=True,
+        )[:14]
+        report["recent_sessions"] = enriched_sorted
     return report
