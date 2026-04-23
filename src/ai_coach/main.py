@@ -250,7 +250,7 @@ def main() -> None:
 
     refresh_parser = subparsers.add_parser("refresh", help="Fetch Intervals.icu")
     refresh_parser.add_argument(
-        "--days", type=int, default=180, help="Nombre de jours à fetcher (défaut: 180)"
+        "--days", type=int, default=750, help="Nombre de jours à fetcher (défaut: 750)"
     )
 
     subparsers.add_parser("summary", help="Résumé du cache local")
