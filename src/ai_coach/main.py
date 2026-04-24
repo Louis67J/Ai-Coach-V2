@@ -242,6 +242,62 @@ def cmd_enrich(max_new: int) -> None:
                 print(f"      ... +{len(intervals)-4} autres")
     print("-" * 80)
 
+
+def cmd_session(date_str: str) -> None:
+    """Génère le graphe détaillé d'une séance."""
+    from ai_coach.intervals import (
+        fetch_activity_intervals, fetch_activity_streams,
+        load_cached_activities, load_enriched_sessions,
+    )
+    from ai_coach.charts import plot_session
+
+    # Cherche la séance dans le cache enrichi
+    sessions = load_enriched_sessions()
+
+    if date_str.lower() in ("last", "derniere", "dernière"):
+        # Dernière séance vélo
+        bike_sessions = [s for s in sessions if s.get("type") in ("Ride", "VirtualRide")]
+        if not bike_sessions:
+            print("❌ Aucune séance vélo enrichie trouvée.")
+            sys.exit(1)
+        target = max(bike_sessions, key=lambda s: s.get("date", ""))
+    else:
+        # Cherche par date
+        matching = [s for s in sessions if date_str in s.get("date", "")]
+        if not matching:
+            print(f"❌ Aucune séance enrichie trouvée pour la date '{date_str}'.")
+            print("   Lance 'python -m ai_coach.main enrich --max 200' d'abord.")
+            sys.exit(1)
+        # Si plusieurs le même jour, prend celle avec le plus de TSS
+        target = max(matching, key=lambda s: s.get("tss", 0))
+
+    act_id = target["id"]
+    print(f"📊 Séance : {target.get('name')} ({target.get('date')})")
+    print(f"   [{target.get('tag')}] TSS={target.get('tss')} NP={target.get('np_watts')}W")
+
+    # Fetch les streams
+    print("   Chargement des streams...")
+    streams = fetch_activity_streams(act_id)
+    if not streams:
+        print("❌ Impossible de charger les streams.")
+        sys.exit(1)
+
+    # Fetch les intervalles pour surlignage (optionnel)
+    intervals_data = fetch_activity_intervals(act_id)
+
+    # Génère le graphe
+    print("   Génération du graphe...")
+    path = plot_session(
+        streams=streams,
+        session_summary=target,
+        intervals_data=intervals_data,
+    )
+    if path:
+        print(f"✅ Graphe généré : {path}")
+    else:
+        print("❌ Échec de la génération.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="ai-coach")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -271,6 +327,12 @@ def main() -> None:
         help="Max de nouvelles séances à fetcher (défaut: 20)"
     )
 
+    session_parser = subparsers.add_parser("session", help="Graphe détaillé d'une séance")
+    session_parser.add_argument(
+        "date", type=str,
+        help="Date (ex: 2026-04-08) ou 'last' pour la dernière"
+    )
+
     args = parser.parse_args()
 
     if args.command == "check":
@@ -290,6 +352,8 @@ def main() -> None:
         run_bot()
     elif args.command == "enrich":
         cmd_enrich(max_new=args.max_new)
+    elif args.command == "session":
+        cmd_session(date_str=args.date)
 
 
 if __name__ == "__main__":

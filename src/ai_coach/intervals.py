@@ -146,6 +146,33 @@ def fetch_activity_intervals(activity_id: str) -> dict | None:
     except Exception as e:
         print(f"  ⚠️ Échec fetch intervalles {activity_id}: {e}")
         return None
+
+def fetch_activity_streams(
+    activity_id: str,
+    types: str = "time,watts,heartrate,cadence,altitude,distance",
+) -> dict[str, list] | None:
+    """
+    Fetch les streams (données seconde par seconde) d'une activité.
+    Retourne un dict {type: [valeurs]} ou None en cas d'erreur.
+    """
+    client = IntervalsClient()
+    url = f"{client.base_url}/activity/{activity_id}/streams?types={types}"
+    try:
+        response = requests.get(url, auth=client.auth, timeout=60)
+        response.raise_for_status()
+        raw = response.json()
+        # Transforme la liste d'objets en dict simple
+        streams = {}
+        for s in raw:
+            stype = s.get("type")
+            sdata = s.get("data", [])
+            if stype and sdata:
+                streams[stype] = sdata
+        return streams
+    except Exception as e:
+        print(f"  ⚠️ Échec fetch streams {activity_id}: {e}")
+        return None
+
 def _build_group_summaries(groups: list[dict], ftp: int = 310) -> list[dict]:
     """
     Transforme les icu_groups en résumés riches pour le coach.

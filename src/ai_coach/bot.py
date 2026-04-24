@@ -126,9 +126,67 @@ async def help_coach(ctx: commands.Context) -> None:
         "`!forget yes` — efface toute la mémoire\n"
         "`!forget_last` — supprime le dernier échange\n"
         "`!enrich [max]` — enrichit les séances (détails + intervalles)\n"
+        "`!session <date|last>` — graphe détaillé d'une séance\n"
         "`!help_coach` — cette aide\n"
     )
     await ctx.send(text)
+
+@bot.command(name="session")
+async def cmd_session(ctx: commands.Context, *, date_str: str = "last") -> None:
+    """
+    Graphe détaillé d'une séance.
+    Usage: !session 2026-04-08  ou  !session last
+    """
+    from ai_coach.intervals import (
+        fetch_activity_streams, fetch_activity_intervals,
+        load_enriched_sessions,
+    )
+    from ai_coach.charts import plot_session
+
+    sessions = load_enriched_sessions()
+
+    if date_str.lower() in ("last", "derniere", "dernière"):
+        bike = [s for s in sessions if s.get("type") in ("Ride", "VirtualRide")]
+        if not bike:
+            await ctx.send("❌ Aucune séance vélo enrichie.")
+            return
+        target = max(bike, key=lambda s: s.get("date", ""))
+    else:
+        matching = [s for s in sessions if date_str in s.get("date", "")]
+        if not matching:
+            await ctx.send(f"❌ Aucune séance trouvée pour '{date_str}'. Lance `!enrich` d'abord.")
+            return
+        target = max(matching, key=lambda s: s.get("tss", 0))
+
+    await ctx.send(
+        f"📊 **{target.get('name')}** ({target.get('date')}) "
+        f"[{target.get('tag')}] TSS={target.get('tss')}\n"
+        f"Chargement des données..."
+    )
+
+    async with ctx.typing():
+        try:
+            streams = fetch_activity_streams(target["id"])
+            if not streams:
+                await ctx.send("❌ Impossible de charger les streams.")
+                return
+
+            intervals_data = fetch_activity_intervals(target["id"])
+
+            path = plot_session(
+                streams=streams,
+                session_summary=target,
+                intervals_data=intervals_data,
+            )
+        except Exception as e:
+            log.exception("session plot failed")
+            await ctx.send(f"❌ Erreur : {e}")
+            return
+
+    if path and Path(path).exists():
+        await ctx.send(file=discord.File(str(path)))
+    else:
+        await ctx.send("❌ Échec de la génération du graphe.")
 
 
 @bot.command(name="stats")
