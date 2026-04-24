@@ -237,17 +237,24 @@ def _format_report_for_llm(report: dict[str, Any]) -> str:
             if dec is not None:
                 lines.append(f"     Découplage cardiaque: {dec:.1f}%")
 
-            pattern = s.get("interval_pattern")
-            if pattern:
-                lines.append(f"     🎯 Structure détectée : {pattern}")
-            intervals = s.get("intervals", [])
-            if intervals and not pattern:
-                # Affiche les intervalles bruts seulement si pas de pattern détecté
-                lines.append(f"     Intervalles bruts ({len(intervals)}) :")
-                for iv in intervals[:6]:
-                    lines.append(f"       • {iv}")
-                if len(intervals) > 6:
-                    lines.append(f"       ... +{len(intervals) - 6} autres")
+                # Groupes d'intervalles détaillés (avec FC, cadence, pente, etc.)
+                groups = s.get("detailed_groups", [])
+                if groups:
+                    lines.append(f"     Intervalles ({len(groups)} blocs) :")
+                    for g in groups:
+                        lines.append(f"       • {g.get('label', '?')}")
+                else:
+                    # Fallback sur le pattern détecté ou les intervalles bruts
+                    pattern = s.get("interval_pattern")
+                    if pattern:
+                        lines.append(f"     🎯 Structure détectée : {pattern}")
+                    intervals = s.get("intervals", [])
+                    if intervals and not pattern:
+                        lines.append(f"     Intervalles bruts ({len(intervals)}) :")
+                        for iv in intervals[:6]:
+                            lines.append(f"       • {iv}")
+                        if len(intervals) > 6:
+                            lines.append(f"       ... +{len(intervals) - 6} autres")
 
     breakdown = report.get("sport_breakdown", {})
     if breakdown:
@@ -266,7 +273,7 @@ def _format_report_for_llm(report: dict[str, Any]) -> str:
 def ask_coach(
     question: str,
     report: dict[str, Any],
-    max_tokens: int = 1500,
+    max_tokens: int = 3000,
     source: str = "cli",
     metadata: dict[str, Any] | None = None,
     history_limit: int = 20,

@@ -132,6 +132,89 @@ def fetch_activity_detail(activity_id: str) -> dict | None:
         print(f"  ⚠️ Échec fetch détail {activity_id}: {e}")
         return None
 
+def fetch_activity_intervals(activity_id: str) -> dict | None:
+    """
+    Fetch les intervalles détaillés d'une activité.
+    Retourne un dict avec 'icu_intervals' et 'icu_groups'.
+    """
+    client = IntervalsClient()
+    url = f"{client.base_url}/activity/{activity_id}/intervals"
+    try:
+        response = requests.get(url, auth=client.auth, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"  ⚠️ Échec fetch intervalles {activity_id}: {e}")
+        return None
+def _build_group_summaries(groups: list[dict], ftp: int = 310) -> list[dict]:
+    """
+    Transforme les icu_groups en résumés riches pour le coach.
+    Chaque groupe = un bloc d'effort agrégé par Intervals.icu.
+    """
+    summaries = []
+    for g in groups:
+        watts = g.get("average_watts") or 0
+        pct_ftp = round(watts / ftp * 100) if ftp else 0
+
+        # Détermine la zone
+        if pct_ftp < 56:
+            zone = "Z1"
+        elif pct_ftp < 76:
+            zone = "Z2"
+        elif pct_ftp < 91:
+            zone = "Z3"
+        elif pct_ftp < 106:
+            zone = "Z4"
+        elif pct_ftp < 120:
+            zone = "Z5"
+        elif pct_ftp < 150:
+            zone = "Z6"
+        else:
+            zone = "Z7"
+
+        count = g.get("count") or 1
+        duration_s = g.get("moving_time") or g.get("elapsed_time") or 0
+
+        # Format durée lisible
+        if duration_s >= 60:
+            dur_str = f"{duration_s // 60}m{duration_s % 60:02d}s" if duration_s % 60 else f"{duration_s // 60}min"
+        else:
+            dur_str = f"{duration_s}s"
+
+        summary = {
+            "count": count,
+            "duration_s": duration_s,
+            "duration_str": dur_str,
+            "avg_watts": watts,
+            "np_watts": g.get("weighted_average_watts"),
+            "pct_ftp": pct_ftp,
+            "zone": zone,
+            "avg_hr": g.get("average_heartrate"),
+            "max_hr": g.get("max_heartrate"),
+            "avg_cadence": round(g.get("average_cadence") or 0),
+            "avg_gradient": round((g.get("average_gradient") or 0) * 100, 1),
+            "avg_speed_kmh": round((g.get("average_speed") or 0) * 3.6, 1),
+            "lr_balance": round(g.get("avg_lr_balance") or 0, 1) if g.get("avg_lr_balance") else None,
+            "elevation_gain": round(g.get("total_elevation_gain") or 0),
+            "decoupling": round(g.get("decoupling") or 0, 1) if g.get("decoupling") else None,
+            "tss": round(g.get("training_load") or 0, 1),
+        }
+
+        # Texte lisible pour le coach
+        label_parts = [f"{count}x {dur_str} @ {watts}W ({zone}, {pct_ftp}% FTP)"]
+        if summary["avg_hr"]:
+            label_parts.append(f"FC moy={summary['avg_hr']}")
+        if summary["avg_cadence"]:
+            label_parts.append(f"cad={summary['avg_cadence']}")
+        if summary["avg_gradient"] and abs(summary["avg_gradient"]) > 0.5:
+            label_parts.append(f"pente={summary['avg_gradient']}%")
+        if summary["lr_balance"] and abs(summary["lr_balance"] - 50) > 1:
+            label_parts.append(f"G/D={summary['lr_balance']}%")
+
+        summary["label"] = " | ".join(label_parts)
+        summaries.append(summary)
+
+    return summaries
 
 def _format_zones_summary(zone_times: list[dict] | None) -> str:
     """Transforme les temps de zones en résumé lisible."""
@@ -372,19 +455,14 @@ def _classify_session(detail: dict) -> str:
     else:
         return "ENDURANCE"
 
-def build_session_summary(detail: dict) -> dict:
+def build_session_summary(detail: dict, intervals_data: dict | None = None) -> dict:
     """
-    Construit une fiche de séance enrichie à partir des détails API.
-    C'est ça qu'on stocke dans le cache et qu'on passe au coach.
+    Construit une fiche de séance enrichie à partir des détails API
+    et optionnellement des intervalles détaillés.
     """
-    # Intervalles détectés
+    # Intervalles résumés (format texte simple d'Intervals)
     intervals_raw = detail.get("interval_summary") or []
-    intervals = []
-    for iv in intervals_raw:
-        if isinstance(iv, str):
-            intervals.append(iv)
-        elif isinstance(iv, dict):
-            intervals.append(iv.get("summary", str(iv)))
+    intervals = [iv for iv in intervals_raw if isinstance(iv, str)]
 
     # Zones résumées
     zones_str = _format_zones_summary(detail.get("icu_zone_times"))
@@ -392,7 +470,7 @@ def build_session_summary(detail: dict) -> dict:
     # Classification auto
     tag = _classify_session(detail)
 
-    # Pattern d'intervalles structurés détecté
+    # Pattern d'intervalles
     ftp = detail.get("icu_ftp") or 310
     interval_pattern = _detect_interval_pattern(intervals, ftp=ftp)
 
@@ -401,6 +479,12 @@ def build_session_summary(detail: dict) -> dict:
     for z in (detail.get("icu_zone_times") or []):
         if isinstance(z, dict) and z.get("id") == "SS":
             ss_secs = z.get("secs", 0)
+
+    # Groupes d'intervalles détaillés (si disponibles)
+    detailed_groups = []
+    if intervals_data:
+        groups = intervals_data.get("icu_groups") or []
+        detailed_groups = _build_group_summaries(groups, ftp=ftp)
 
     summary = {
         "id": detail.get("id"),
@@ -437,16 +521,18 @@ def build_session_summary(detail: dict) -> dict:
         "zones": zones_str,
         "sweet_spot_min": round(ss_secs / 60, 1) if ss_secs else 0,
 
-        # Intervalles détectés
+        # Intervalles (résumé texte)
         "intervals": intervals,
         "interval_pattern": interval_pattern,
+
+        # Intervalles détaillés (groupes avec FC, cadence, pente, etc.)
+        "detailed_groups": detailed_groups,
 
         # Modèle de puissance
         "p_max": detail.get("p_max"),
         "polarization_index": detail.get("polarization_index"),
     }
     return summary
-
 
 def enrich_sessions(activities: list[dict], max_new: int = 20) -> list[dict]:
     """
@@ -484,7 +570,9 @@ def enrich_sessions(activities: list[dict], max_new: int = 20) -> list[dict]:
         print(f"  🔍 Enrichissement: {name}...")
         detail = fetch_activity_detail(act_id)
         if detail:
-            summary = build_session_summary(detail)
+            # Fetch aussi les intervalles détaillés
+            intervals_data = fetch_activity_intervals(act_id)
+            summary = build_session_summary(detail, intervals_data=intervals_data)
             cache[act_id] = summary
             new_count += 1
 
