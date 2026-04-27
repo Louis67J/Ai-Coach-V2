@@ -18,7 +18,7 @@ import discord
 from discord.ext import commands
 
 from ai_coach.analysis import build_report
-from ai_coach.coach import ask_coach, generate_plan
+from ai_coach.coach import ask_coach, generate_plan, ask_coach_async, generate_plan_async
 from ai_coach.config import OUTPUTS_DIR, load_config
 from ai_coach.intervals import load_cached_activities, refresh_cache
 
@@ -239,7 +239,7 @@ async def cmd_ask(ctx: commands.Context, *, question: str) -> None:
 
     async with ctx.typing():
         try:
-            answer = ask_coach(
+            answer = await ask_coach_async(
                 question, result,
                 source="discord",
                 metadata=metadata,
@@ -270,7 +270,7 @@ async def cmd_plan(ctx: commands.Context, days: int = 7) -> None:
 
     async with ctx.typing():
         try:
-            plan_text = generate_plan(
+            plan_text = await generate_plan_async(
                 result,
                 horizon_days=days,
                 source="discord",

@@ -445,3 +445,60 @@ def generate_plan(
         source=source,
         metadata=metadata,
     )
+
+async def ask_coach_async(
+    question: str,
+    report: dict[str, Any],
+    max_tokens: int = 3000,
+    source: str = "discord",
+    metadata: dict[str, Any] | None = None,
+    history_limit: int = 20,
+    persist: bool = True,
+) -> str:
+    """
+    Version async de ask_coach, pour le bot Discord.
+    Exécute l'appel bloquant dans un thread séparé pour ne pas bloquer
+    la boucle événementielle de Discord.
+    """
+    import asyncio
+    import functools
+
+    # Wrap l'appel synchrone dans un executor
+    loop = asyncio.get_event_loop()
+    answer = await loop.run_in_executor(
+        None,
+        functools.partial(
+            ask_coach,
+            question=question,
+            report=report,
+            max_tokens=max_tokens,
+            source=source,
+            metadata=metadata,
+            history_limit=history_limit,
+            persist=persist,
+        ),
+    )
+    return answer
+
+
+async def generate_plan_async(
+    report: dict[str, Any],
+    horizon_days: int = 7,
+    source: str = "discord",
+    metadata: dict[str, Any] | None = None,
+) -> str:
+    """Version async de generate_plan."""
+    import asyncio
+    import functools
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        functools.partial(
+            generate_plan,
+            report=report,
+            horizon_days=horizon_days,
+            source=source,
+            metadata=metadata,
+        ),
+    )

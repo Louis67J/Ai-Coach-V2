@@ -653,12 +653,12 @@ def build_report(activities: list[dict]) -> dict[str, Any]:
     from ai_coach.intervals import load_enriched_sessions
     enriched = load_enriched_sessions()
     if enriched:
-        # Trie par date, garde les 14 plus récentes
+        # Trie par date, garde les 7 plus récentes
         enriched_sorted = sorted(
             enriched,
             key=lambda s: s.get("date", ""),
             reverse=True,
-        )[:14]
+        )[:7]
         report["recent_sessions"] = enriched_sorted
         # --- Métriques avancées ---
 
