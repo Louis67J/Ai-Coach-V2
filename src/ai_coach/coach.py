@@ -256,6 +256,84 @@ def _format_report_for_llm(report: dict[str, Any]) -> str:
                         if len(intervals) > 6:
                             lines.append(f"       ... +{len(intervals) - 6} autres")
 
+        # --- Métriques avancées ---
+        mono = report.get("monotony_strain", {})
+        if mono:
+            lines.append("\n=== MÉTRIQUES AVANCÉES ===")
+            lines.append(f"\n📊 Monotonie & Strain (7 derniers jours) :")
+            lines.append(f"  Monotonie = {mono.get('monotony', '?')} ({mono.get('monotony_status', '?')})")
+            lines.append(f"  Strain = {mono.get('strain', '?')} ({mono.get('strain_status', '?')})")
+            lines.append(
+                f"  TSS quotidien moyen = {mono.get('daily_mean_tss', '?')} ± {mono.get('daily_std_tss', '?')}")
+
+        forecast = report.get("ctl_forecast", [])
+        if forecast:
+            lines.append(f"\n📈 Projection CTL (si charge actuelle maintenue) :")
+            for f in forecast:
+                lines.append(
+                    f"  J+{f['horizon_days']} ({f['target_date']}) : "
+                    f"CTL projeté = {f['projected_ctl']} "
+                    f"({'↗️ +' if f['delta_vs_now'] > 0 else '↘️ '}{f['delta_vs_now']})"
+                )
+            lines.append(f"  Hypothèse : {forecast[0].get('assumption_daily_tss', '?')} TSS/jour en moyenne")
+
+        durability = report.get("durability", {})
+        if durability and durability.get("status") != "insufficient_data":
+            lines.append(f"\n🏋️ Durabilité (sorties >2h) :")
+            lines.append(f"  Note : {durability.get('durability_rating', '?')}")
+            lines.append(f"  Découplage moyen : {durability.get('avg_decoupling_pct', '?')}%")
+            if "trend" in durability:
+                lines.append(f"  Tendance : {durability['trend']}")
+            lines.append(f"  Basé sur {durability.get('count', '?')} sorties longues")
+
+        ftp_trend = report.get("ftp_trend", {})
+        if ftp_trend and ftp_trend.get("status") != "insufficient_data":
+            lines.append(f"\n📉 Tendance FTP (NP des séances intenses IF>0.75) :")
+            if "trend" in ftp_trend:
+                lines.append(f"  Tendance : {ftp_trend['trend']}")
+            if "recent_avg_top5_np" in ftp_trend:
+                lines.append(f"  Top 5 NP récent (3 mois) : {ftp_trend['recent_avg_top5_np']}W")
+            if "older_avg_top5_np" in ftp_trend:
+                lines.append(f"  Top 5 NP ancien : {ftp_trend['older_avg_top5_np']}W")
+            if "np_delta" in ftp_trend:
+                lines.append(f"  Delta : {'+' if ftp_trend['np_delta'] > 0 else ''}{ftp_trend['np_delta']}W")
+            if ftp_trend.get("recent_best_np"):
+                lines.append(f"  Meilleures séances récentes :")
+                for perf in ftp_trend["recent_best_np"][:3]:
+                    lines.append(f"    • {perf['date']} : NP={perf['np']}W ({perf['name']})")
+
+        power = report.get("power_profile", {})
+        if power and power.get("profile"):
+            lines.append(f"\n⚡ Profil de puissance ({power.get('weight_kg_used', '?')}kg, "
+                         f"source: {power.get('source', '?')}, "
+                         f"période: {power.get('period', '?')})")
+            for duration, data in power["profile"].items():
+                lines.append(
+                    f"  {duration:>5s} : {data['watts']:>4d}W = {data['w_kg']:.1f} W/kg ({data['level']})"
+                )
+            if power.get("strengths"):
+                lines.append(f"  💪 Forces : {', '.join(power['strengths'])}")
+            if power.get("weaknesses"):
+                lines.append(f"  ⚠️ Faiblesses : {', '.join(power['weaknesses'])}")
+
+            models = power.get("power_models", {})
+            if models:
+                lines.append(f"\n  Modèles de puissance (calculés par Intervals.icu) :")
+                for model_name, m in models.items():
+                    parts = []
+                    if m.get("cp"):
+                        parts.append(f"CP={m['cp']}W")
+                    if m.get("ftp"):
+                        parts.append(f"FTP={m['ftp']}W")
+                    if m.get("w_prime"):
+                        parts.append(f"W'={round(m['w_prime'] / 1000, 1)}kJ")
+                    if m.get("p_max"):
+                        parts.append(f"Pmax={m['p_max']}W")
+                    lines.append(f"    {model_name}: {', '.join(parts)}")
+
+            if power.get("vo2max_estimated"):
+                lines.append(f"  VO2max estimée (5min power) : {power['vo2max_estimated']:.1f} ml/kg/min")
+
     breakdown = report.get("sport_breakdown", {})
     if breakdown:
         lines.append("\nRépartition par sport (période analysée) :")

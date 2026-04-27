@@ -297,6 +297,74 @@ def cmd_session(date_str: str) -> None:
     else:
         print("❌ Échec de la génération.")
 
+def cmd_metrics() -> None:
+    """Affiche les métriques avancées."""
+    from ai_coach.intervals import load_cached_activities
+    from ai_coach.analysis import build_report
+
+    activities = load_cached_activities()
+    if not activities:
+        print("❌ Aucun cache. Lance d'abord: python -m ai_coach.main refresh")
+        sys.exit(1)
+
+    print("📊 Calcul des métriques avancées...\n")
+    report = build_report(activities)
+
+    # Monotonie & Strain
+    mono = report.get("monotony_strain", {})
+    if mono:
+        print("🔄 Monotonie & Strain (7 derniers jours)")
+        print(f"   Monotonie : {mono.get('monotony', '?')} ({mono.get('monotony_status', '?')})")
+        print(f"   Strain    : {mono.get('strain', '?')} ({mono.get('strain_status', '?')})")
+        print(f"   TSS/jour  : {mono.get('daily_mean_tss', '?')} ± {mono.get('daily_std_tss', '?')}")
+        print()
+
+    # Projection CTL
+    forecast = report.get("ctl_forecast", [])
+    if forecast:
+        print("📈 Projection CTL")
+        for f in forecast:
+            arrow = "↗️" if f["delta_vs_now"] > 0 else "↘️"
+            print(f"   J+{f['horizon_days']:>2} ({f['target_date']}) : CTL = {f['projected_ctl']} ({arrow} {f['delta_vs_now']:+.1f})")
+        print(f"   Hypothèse : ~{forecast[0]['assumption_daily_tss']:.0f} TSS/jour")
+        print()
+
+    # Durabilité
+    dur = report.get("durability", {})
+    if dur and dur.get("status") != "insufficient_data":
+        print("🏋️  Durabilité")
+        print(f"   Note       : {dur.get('durability_rating', '?')}")
+        print(f"   Découplage : {dur.get('avg_decoupling_pct', '?')}% en moyenne")
+        if "trend" in dur:
+            print(f"   Tendance   : {dur['trend']}")
+        print(f"   ({dur.get('count', '?')} sorties >2h analysées)")
+        print()
+
+    # Tendance FTP
+    ftp = report.get("ftp_trend", {})
+    if ftp and ftp.get("status") != "insufficient_data":
+        print("📉 Tendance FTP")
+        if "trend" in ftp:
+            print(f"   Tendance : {ftp['trend']}")
+        if "recent_avg_top5_np" in ftp:
+            print(f"   Top 5 NP récent  : {ftp['recent_avg_top5_np']}W")
+        if "older_avg_top5_np" in ftp:
+            print(f"   Top 5 NP ancien  : {ftp['older_avg_top5_np']}W")
+        if "np_delta" in ftp:
+            print(f"   Delta            : {'+' if ftp['np_delta'] > 0 else ''}{ftp['np_delta']}W")
+        print()
+
+    # Profil de puissance
+    pp = report.get("power_profile", {})
+    if pp and pp.get("profile"):
+        print(f"⚡ Profil de puissance ({pp.get('weight_kg_used', '?')}kg)")
+        for duration, data in pp["profile"].items():
+            bar = "█" * max(1, int(data["w_kg"] * 3))
+            print(f"   {duration:>5s} : {data['watts']:>4d}W = {data['w_kg']:.1f} W/kg  {bar}  ({data['level']})")
+        if pp.get("strengths"):
+            print(f"   💪 Forces    : {', '.join(pp['strengths'])}")
+        if pp.get("weaknesses"):
+            print(f"   ⚠️  Faiblesses : {', '.join(pp['weaknesses'])}")
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="ai-coach")
@@ -332,6 +400,8 @@ def main() -> None:
         "date", type=str,
         help="Date (ex: 2026-04-08) ou 'last' pour la dernière"
     )
+    subparsers.add_parser("metrics", help="Métriques avancées (monotonie, projection, durabilité, FTP, profil)")
+
 
     args = parser.parse_args()
 
@@ -354,6 +424,8 @@ def main() -> None:
         cmd_enrich(max_new=args.max_new)
     elif args.command == "session":
         cmd_session(date_str=args.date)
+    elif args.command == "metrics":
+        cmd_metrics()
 
 
 if __name__ == "__main__":

@@ -173,6 +173,27 @@ def fetch_activity_streams(
         print(f"  ⚠️ Échec fetch streams {activity_id}: {e}")
         return None
 
+def fetch_power_curves(sport_type: str = "Ride") -> dict | None:
+    """
+    Fetch la power curve de l'athlète depuis Intervals.icu.
+    Retourne le dict complet avec secs, values, watts_per_kg, powerModels.
+    """
+    client = IntervalsClient()
+    url = f"{client.base_url}/athlete/{client.athlete_id}/power-curves?type={sport_type}"
+    try:
+        response = requests.get(url, auth=client.auth, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        if isinstance(data, dict) and "list" in data:
+            curves = data["list"]
+            if curves and len(curves) > 0:
+                return curves[0]  # Premier élément = courbe par défaut (1 an)
+        return None
+    except Exception as e:
+        print(f"  ⚠️ Échec fetch power curves: {e}")
+        return None
+
+
 def _build_group_summaries(groups: list[dict], ftp: int = 310) -> list[dict]:
     """
     Transforme les icu_groups en résumés riches pour le coach.
