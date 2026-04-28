@@ -366,6 +366,25 @@ def cmd_metrics() -> None:
         if pp.get("weaknesses"):
             print(f"   ⚠️  Faiblesses : {', '.join(pp['weaknesses'])}")
 
+    models = pp.get("power_models", {})
+    if models:
+        print(f"\n   🔬 Modèles de puissance (Intervals.icu) :")
+        for name, m in models.items():
+            parts = []
+            if m.get("cp"):
+                parts.append(f"CP={m['cp']}W")
+            if m.get("ftp"):
+                parts.append(f"FTP={m['ftp']}W")
+            if m.get("w_prime"):
+                parts.append(f"W'={round(m['w_prime'] / 1000, 1)}kJ")
+            if m.get("p_max"):
+                parts.append(f"Pmax={m['p_max']}W")
+            print(f"      {name}: {', '.join(parts)}")
+
+    vo2 = pp.get("vo2max_estimated")
+    if vo2:
+        print(f"\n   🫁 VO2max estimée : {vo2:.1f} ml/kg/min")
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="ai-coach")
     subparsers = parser.add_subparsers(dest="command", required=True)

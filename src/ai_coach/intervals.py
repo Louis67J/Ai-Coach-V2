@@ -483,6 +483,28 @@ def _classify_session(detail: dict) -> str:
             if "(Z3" in block_desc and "min" in block_desc:
                 return "TEMPO"
 
+    # Détecte les sprints significatifs (même dans une séance Z2 globale)
+    sprint_blocks = [
+        b for b in (detail.get("interval_summary") or [])
+        if isinstance(b, str) and "s " in b
+    ]
+    has_significant_sprints = False
+    for sb in sprint_blocks:
+        parts = sb.strip().split()
+        try:
+            count = int(parts[0].replace("x", ""))
+            dur_str = parts[1]
+            watts = int(parts[2].replace("w", ""))
+            secs = int(dur_str.replace("s", "")) if "m" not in dur_str else 999
+            if secs <= 30 and watts > ftp * 1.5 and count >= 2:
+                has_significant_sprints = True
+                break
+        except (ValueError, IndexError):
+            continue
+
+    if has_significant_sprints and z1z2 >= 70:
+        return "ENDURANCE_SPRINTS"
+
     # --- Sinon, classification par zones globales ---
     if if_val < 55:
         return "RECUP"
@@ -579,6 +601,8 @@ def build_session_summary(detail: dict, intervals_data: dict | None = None) -> d
         # Modèle de puissance
         "p_max": detail.get("p_max"),
         "polarization_index": detail.get("polarization_index"),
+
+        "rolling_ftp": detail.get("icu_rolling_ftp"),
     }
     return summary
 

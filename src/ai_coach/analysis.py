@@ -290,12 +290,10 @@ def compute_durability_index(sessions: list[dict]) -> dict[str, Any]:
 
 def compute_ftp_trend(sessions: list[dict]) -> dict[str, Any]:
     """
-    Analyse la tendance FTP en regardant l'évolution des meilleurs
-    efforts 20min (icu_pm_ftp_watts ou NP des séances seuil/VO2).
-
-    Utilise les sessions enrichies qui ont des données de puissance.
+    Analyse la tendance FTP en utilisant le icu_rolling_ftp calculé
+    par Intervals.icu (plus fiable que le NP brut des séances).
+    Fallback sur NP des séances intenses si rolling_ftp absent.
     """
-    # Cherche les séances avec des efforts significatifs au seuil
     data_points = []
 
     for s in sessions:
@@ -305,53 +303,59 @@ def compute_ftp_trend(sessions: list[dict]) -> dict[str, Any]:
         if not date_str:
             continue
 
-        # Utilise le NP des séances intenses (IF > 0.75) comme proxy
-        if_val = s.get("intensity_factor") or 0
-        np_w = s.get("np_watts")
-        tss = s.get("tss") or 0
-
-        # On ne garde que les séances assez intenses et longues
-        duration_h = (s.get("moving_time_s") or 0) / 3600
-        if np_w and if_val >= 0.75 and duration_h >= 0.5 and tss >= 40:
+        # Priorité : icu_rolling_ftp (calculé par Intervals)
+        rolling_ftp = s.get("rolling_ftp")
+        if rolling_ftp and rolling_ftp > 100:
             data_points.append({
                 "date": date_str,
-                "np": np_w,
-                "if": if_val,
+                "ftp_estimate": rolling_ftp,
+                "source": "rolling_ftp",
+                "name": s.get("name", "?")[:30],
+            })
+            continue
+
+        # Fallback : NP des séances intenses longues (>1h, IF>0.80)
+        if_val = s.get("intensity_factor") or 0
+        np_w = s.get("np_watts")
+        duration_h = (s.get("moving_time_s") or 0) / 3600
+        if np_w and if_val >= 0.80 and duration_h >= 1.0:
+            data_points.append({
+                "date": date_str,
+                "ftp_estimate": np_w,
+                "source": "np_intense",
                 "name": s.get("name", "?")[:30],
             })
 
     if len(data_points) < 5:
         return {"status": "insufficient_data", "count": len(data_points)}
 
-    # Trie par date
     data_points.sort(key=lambda x: x["date"])
 
-    # NP moyen des 5 meilleures séances récentes (3 derniers mois) vs anciennes
     recent_cutoff = (date.today() - timedelta(days=90)).isoformat()
     recent = [d for d in data_points if d["date"] >= recent_cutoff]
     older = [d for d in data_points if d["date"] < recent_cutoff]
 
     result: dict[str, Any] = {
-        "total_quality_sessions": len(data_points),
+        "total_data_points": len(data_points),
         "recent_3_months": len(recent),
         "older": len(older),
     }
 
     if recent:
-        recent_top = sorted(recent, key=lambda x: x["np"], reverse=True)[:5]
-        result["recent_best_np"] = [
-            {"date": d["date"], "np": d["np"], "name": d["name"]}
+        recent_top = sorted(recent, key=lambda x: x["ftp_estimate"], reverse=True)[:5]
+        result["recent_best"] = [
+            {"date": d["date"], "ftp": d["ftp_estimate"], "source": d["source"], "name": d["name"]}
             for d in recent_top
         ]
-        result["recent_avg_top5_np"] = round(np.mean([d["np"] for d in recent_top]), 0)
+        result["recent_avg_top5"] = round(float(np.mean([d["ftp_estimate"] for d in recent_top])), 0)
 
     if older:
-        older_top = sorted(older, key=lambda x: x["np"], reverse=True)[:5]
-        result["older_avg_top5_np"] = round(np.mean([d["np"] for d in older_top]), 0)
+        older_top = sorted(older, key=lambda x: x["ftp_estimate"], reverse=True)[:5]
+        result["older_avg_top5"] = round(float(np.mean([d["ftp_estimate"] for d in older_top])), 0)
 
-    if recent and older and "recent_avg_top5_np" in result and "older_avg_top5_np" in result:
-        delta = result["recent_avg_top5_np"] - result["older_avg_top5_np"]
-        result["np_delta"] = round(float(delta), 0)
+    if "recent_avg_top5" in result and "older_avg_top5" in result:
+        delta = result["recent_avg_top5"] - result["older_avg_top5"]
+        result["delta"] = round(float(delta), 0)
         if delta > 5:
             result["trend"] = "en progression ↗️"
         elif delta < -5:
@@ -362,7 +366,6 @@ def compute_ftp_trend(sessions: list[dict]) -> dict[str, Any]:
         result["trend"] = "pas assez d'historique ancien pour comparer"
 
     return result
-
 
 def compute_power_profile(sessions: list[dict], weight_kg: float = 63.0) -> dict[str, Any]:
     """

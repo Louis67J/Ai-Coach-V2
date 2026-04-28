@@ -20,6 +20,10 @@ from datetime import date, timedelta
 
 from ai_coach.memory import append_exchange, load_recent_exchanges, to_anthropic_messages
 
+from ai_coach.weather import fetch_forecast, format_weather_for_llm
+
+from ai_coach.wellness import fetch_wellness, build_wellness_summary, format_wellness_for_llm
+
 # Modèle par défaut. Overridable via env var ANTHROPIC_MODEL.
 DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
 
@@ -288,19 +292,19 @@ def _format_report_for_llm(report: dict[str, Any]) -> str:
 
         ftp_trend = report.get("ftp_trend", {})
         if ftp_trend and ftp_trend.get("status") != "insufficient_data":
-            lines.append(f"\n📉 Tendance FTP (NP des séances intenses IF>0.75) :")
+            lines.append(f"\n📉 Tendance FTP :")
             if "trend" in ftp_trend:
                 lines.append(f"  Tendance : {ftp_trend['trend']}")
-            if "recent_avg_top5_np" in ftp_trend:
-                lines.append(f"  Top 5 NP récent (3 mois) : {ftp_trend['recent_avg_top5_np']}W")
-            if "older_avg_top5_np" in ftp_trend:
-                lines.append(f"  Top 5 NP ancien : {ftp_trend['older_avg_top5_np']}W")
-            if "np_delta" in ftp_trend:
-                lines.append(f"  Delta : {'+' if ftp_trend['np_delta'] > 0 else ''}{ftp_trend['np_delta']}W")
-            if ftp_trend.get("recent_best_np"):
-                lines.append(f"  Meilleures séances récentes :")
-                for perf in ftp_trend["recent_best_np"][:3]:
-                    lines.append(f"    • {perf['date']} : NP={perf['np']}W ({perf['name']})")
+            if "recent_avg_top5" in ftp_trend:
+                lines.append(f"  Top 5 estimations récentes (3 mois) : ~{ftp_trend['recent_avg_top5']}W")
+            if "older_avg_top5" in ftp_trend:
+                lines.append(f"  Top 5 estimations anciennes : ~{ftp_trend['older_avg_top5']}W")
+            if "delta" in ftp_trend:
+                lines.append(f"  Delta : {'+' if ftp_trend['delta'] > 0 else ''}{ftp_trend['delta']}W")
+            if ftp_trend.get("recent_best"):
+                lines.append(f"  Meilleures estimations récentes :")
+                for perf in ftp_trend["recent_best"][:3]:
+                    lines.append(f"    • {perf['date']} : ~{perf['ftp']}W ({perf['source']}, {perf['name']})")
 
         power = report.get("power_profile", {})
         if power and power.get("profile"):
@@ -380,6 +384,19 @@ def ask_coach(
     # Calendrier explicite
     calendar_text = _build_calendar_window(profile, days_ahead=14)
 
+    # Météo J+7
+    weather_data = fetch_forecast(
+        latitude=profile.get("context", {}).get("latitude", 45.19),
+        longitude=profile.get("context", {}).get("longitude", 5.72),
+        location_name=profile.get("context", {}).get("base_location", "Grenoble"),
+    )
+    weather_text = format_weather_for_llm(weather_data) if weather_data else ""
+
+    # Wellness / récupération
+    wellness_data = fetch_wellness(days=14)
+    wellness_summary = build_wellness_summary(wellness_data)
+    wellness_text = format_wellness_for_llm(wellness_summary) if wellness_summary else ""
+
     # Rapport d'analyse
     report_text = _format_report_for_llm(report)
 
@@ -392,6 +409,8 @@ def ask_coach(
     current_user_message = (
         f"{profile_text}\n\n"
         f"{calendar_text}\n\n"
+        f"{weather_text}\n\n"
+        f"{wellness_text}\n\n"
         f"{report_text}\n\n"
         f"=== Ma question ===\n{question}"
     )
