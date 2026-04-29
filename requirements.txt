@@ -17,3 +17,5 @@ discord.py>=2.4.0
 
 # Config / env
 python-dotenv>=1.0.0
+
+scipy>=1.13.0

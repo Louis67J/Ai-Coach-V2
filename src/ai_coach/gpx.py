@@ -99,105 +99,64 @@ def parse_gpx(gpx_content: str) -> list[GpxPoint]:
     return points
 
 
-def _detect_climbs(points: list[GpxPoint], min_gain: float = 50, min_gradient: float = 2.0) -> list[Climb]:
-    """
-    Détecte les montées significatives dans le parcours.
-    min_gain : dénivelé minimum en mètres pour considérer une montée
-    min_gradient : pente moyenne minimum en % pour considérer une montée
-    """
-    if len(points) < 10:
-        return []
-
-    # Lisse l'altitude (moyenne glissante) pour éviter le bruit GPS
-    window = min(20, len(points) // 5)
-    if window < 3:
-        window = 3
-    elevations = np.array([p.ele for p in points])
-    smoothed = np.convolve(elevations, np.ones(window) / window, mode="same")
-
-    climbs = []
-    in_climb = False
-    climb_start_idx = 0
-    climb_start_ele = 0
-    max_gradient_in_climb = 0
-
-    for i in range(1, len(points)):
-        dist_delta = (points[i].dist_cum_km - points[i - 1].dist_cum_km) * 1000  # en mètres
-        if dist_delta < 1:
-            continue
-        ele_delta = smoothed[i] - smoothed[i - 1]
-        gradient = (ele_delta / dist_delta) * 100
-
-        if not in_climb and gradient > min_gradient:
-            in_climb = True
-            climb_start_idx = i - 1
-            climb_start_ele = smoothed[i - 1]
-            max_gradient_in_climb = gradient
-        elif in_climb:
-            if gradient > max_gradient_in_climb:
-                max_gradient_in_climb = gradient
-            if gradient < -1 or i == len(points) - 1:
-                # Fin de la montée
-                gain = smoothed[i - 1] - climb_start_ele
-                length_km = points[i - 1].dist_cum_km - points[climb_start_idx].dist_cum_km
-                if gain >= min_gain and length_km > 0.3:
-                    avg_grad = (gain / (length_km * 1000)) * 100
-                    if avg_grad >= min_gradient:
-                        climbs.append(Climb(
-                            start_km=round(points[climb_start_idx].dist_cum_km, 1),
-                            end_km=round(points[i - 1].dist_cum_km, 1),
-                            length_km=round(length_km, 1),
-                            elevation_gain=round(gain),
-                            avg_gradient=round(avg_grad, 1),
-                            max_gradient=round(max_gradient_in_climb, 1),
-                            start_ele=round(climb_start_ele),
-                            summit_ele=round(smoothed[i - 1]),
-                        ))
-                in_climb = False
-
-    return climbs
-
-
 def analyze_gpx(gpx_content: str) -> GpxSummary:
-    """Analyse complète d'un fichier GPX."""
+    """
+    Analyse complète d'un fichier GPX.
+    Utilise un rééchantillonnage à 200m + lissage 1km pour éliminer
+    le bruit GPS qui crée des gradients et D+ fictifs.
+    """
     points = parse_gpx(gpx_content)
 
     if len(points) < 2:
         raise ValueError("GPX invalide ou vide (moins de 2 points)")
 
     total_dist = points[-1].dist_cum_km
-    elevations = [p.ele for p in points]
 
-    # D+ et D-
+    # --- Rééchantillonnage à 200m + lissage pour des métriques fiables ---
+    cum_dists_m = np.array([p.dist_cum_km * 1000 for p in points])
+    raw_eles = np.array([p.ele for p in points])
+
+    # Rééchantillonne tous les 200m
+    sample_step = 200  # mètres
+    sample_dists = np.arange(0, cum_dists_m[-1], sample_step)
+    sample_eles = np.interp(sample_dists, cum_dists_m, raw_eles)
+
+    # Lisse sur ~1km (5 points * 200m)
+    smooth_window = max(5, 1)
+    from scipy.ndimage import uniform_filter1d
+    smoothed_eles = uniform_filter1d(sample_eles, size=smooth_window)
+
+    # D+ et D- depuis les données lissées
     gain = 0.0
     loss = 0.0
-    for i in range(1, len(points)):
-        diff = points[i].ele - points[i - 1].ele
+    for i in range(1, len(smoothed_eles)):
+        diff = smoothed_eles[i] - smoothed_eles[i - 1]
         if diff > 0:
             gain += diff
         else:
             loss += abs(diff)
 
-    # Détecte les montées
-    climbs = _detect_climbs(points)
+    # Détecte les montées depuis les données rééchantillonnées
+    climbs = _detect_climbs_resampled(sample_dists, smoothed_eles)
 
     # Profil simplifié (un point tous les 2km environ)
     step_km = max(1, round(total_dist / 50))
     profile = []
     next_km = 0
-    for pt in points:
-        if pt.dist_cum_km >= next_km:
-            profile.append((round(pt.dist_cum_km, 1), round(pt.ele)))
+    for i, d_m in enumerate(sample_dists):
+        d_km = d_m / 1000
+        if d_km >= next_km:
+            profile.append((round(d_km, 1), round(smoothed_eles[i])))
             next_km += step_km
-    if profile[-1][0] < total_dist - 0.5:
-        profile.append((round(total_dist, 1), round(points[-1].ele)))
+    if profile and profile[-1][0] < total_dist - 0.5:
+        profile.append((round(total_dist, 1), round(smoothed_eles[-1])))
 
     return GpxSummary(
         total_distance_km=round(total_dist, 1),
         total_elevation_gain=round(gain),
         total_elevation_loss=round(loss),
-        min_elevation=round(min(elevations)),
-        max_elevation=round(max(elevations)),
+        min_elevation=round(float(smoothed_eles.min())),
+        max_elevation=round(float(smoothed_eles.max())),
         start_lat=points[0].lat,
         start_lon=points[0].lon,
         end_lat=points[-1].lat,
@@ -206,6 +165,65 @@ def analyze_gpx(gpx_content: str) -> GpxSummary:
         profile_points=profile,
     )
 
+
+def _detect_climbs_resampled(
+    distances_m: np.ndarray,
+    elevations: np.ndarray,
+    min_gain: float = 50,
+    min_gradient: float = 2.0,
+) -> list[Climb]:
+    """
+    Détecte les montées depuis des données rééchantillonnées et lissées.
+    Beaucoup plus fiable que la détection point par point.
+    """
+    if len(distances_m) < 5:
+        return []
+
+    # Calcule le gradient par segment (déjà lissé)
+    step = distances_m[1] - distances_m[0]  # 200m typiquement
+    gradients = np.diff(elevations) / step * 100  # en %
+
+    # Clippe les gradients aberrants (>20% c'est déjà extrême sur route)
+    gradients = np.clip(gradients, -25, 25)
+
+    climbs = []
+    in_climb = False
+    climb_start_idx = 0
+    climb_start_ele = 0
+
+    for i in range(len(gradients)):
+        if not in_climb and gradients[i] > min_gradient:
+            in_climb = True
+            climb_start_idx = i
+            climb_start_ele = elevations[i]
+        elif in_climb:
+            # Fin de montée : gradient négatif ou fin du parcours
+            if gradients[i] < -1 or i == len(gradients) - 1:
+                end_idx = i
+                gain = elevations[end_idx] - climb_start_ele
+                length_m = distances_m[end_idx] - distances_m[climb_start_idx]
+                length_km = length_m / 1000
+
+                if gain >= min_gain and length_km > 0.3:
+                    avg_grad = (gain / length_m) * 100
+                    # Gradient max sur cette montée (déjà clippé)
+                    section_grads = gradients[climb_start_idx:end_idx + 1]
+                    max_grad = float(section_grads.max()) if len(section_grads) > 0 else avg_grad
+
+                    if avg_grad >= min_gradient:
+                        climbs.append(Climb(
+                            start_km=round(distances_m[climb_start_idx] / 1000, 1),
+                            end_km=round(distances_m[end_idx] / 1000, 1),
+                            length_km=round(length_km, 1),
+                            elevation_gain=round(gain),
+                            avg_gradient=round(avg_grad, 1),
+                            max_gradient=round(max_grad, 1),
+                            start_ele=round(climb_start_ele),
+                            summit_ele=round(float(elevations[end_idx])),
+                        ))
+                in_climb = False
+
+    return climbs
 
 def format_gpx_for_llm(
     summary: GpxSummary,
@@ -223,14 +241,18 @@ def format_gpx_for_llm(
     lines.append(f"Altitude : {summary.min_elevation}m → {summary.max_elevation}m")
     lines.append(f"Départ GPS : {summary.start_lat:.4f}, {summary.start_lon:.4f}")
 
-    # Estimation de temps
-    # Formule simplifiée : (distance/vitesse_plat) + (D+/vitesse_montée)
-    flat_speed = ftp * 0.7 / weight_kg * 3.6 * 0.8  # estimation grossière km/h en plat
-    climb_rate = (ftp * 0.85 - weight_kg * 9.81 * 0.005) / (weight_kg * 9.81) * 3600  # m D+/h
-    if climb_rate < 500:
-        climb_rate = 800
-    est_time_h = (summary.total_distance_km / flat_speed) + (summary.total_elevation_gain / climb_rate)
-    lines.append(f"\nEstimation temps (~{ftp}W FTP, {weight_kg}kg) : {est_time_h:.1f}h")
+    # Estimation de temps basée sur des moyennes réalistes cyclisme route
+    # Méthode : vitesse de base ajustée par le D+/km
+    d_plus_per_km = summary.total_elevation_gain / max(summary.total_distance_km, 1)
+    if d_plus_per_km > 20:  # montagneux
+        avg_speed = 22 + (ftp - 250) * 0.04  # ~24-26 km/h pour FTP 300-350
+    elif d_plus_per_km > 10:  # vallonné
+        avg_speed = 26 + (ftp - 250) * 0.04  # ~28-30 km/h
+    else:  # plat
+        avg_speed = 30 + (ftp - 250) * 0.05  # ~33-35 km/h
+    est_time_h = summary.total_distance_km / avg_speed
+    lines.append(
+        f"\nEstimation temps (~{ftp}W FTP, {weight_kg}kg) : {est_time_h:.1f}h ({avg_speed:.0f} km/h moy estimée)")
 
     # Montées détectées
     if summary.climbs:
@@ -243,16 +265,22 @@ def format_gpx_for_llm(
             )
             # Estimation puissance cible par montée
             target_watts = round(ftp * (0.85 if c.avg_gradient < 6 else 0.80 if c.avg_gradient < 8 else 0.75))
-            est_min = round(c.length_km / (climb_rate / 1000 / 60 * (c.avg_gradient / 5)))
             lines.append(f"     → Cible : ~{target_watts}W ({round(target_watts/weight_kg, 1)} W/kg)")
     else:
         lines.append("\nPas de montée significative détectée (parcours plat ou vallonné).")
 
-    # Profil altimétrique résumé
+    # Estimation du temps
     if summary.profile_points:
         lines.append(f"\nProfil altimétrique (simplifié) :")
-        for km, ele in summary.profile_points[:30]:
-            bar_len = max(0, int((ele - summary.min_elevation) / max(1, summary.max_elevation - summary.min_elevation) * 30))
+        # Affiche max 40 points pour rester lisible
+        step = max(1, len(summary.profile_points) // 40)
+        displayed = summary.profile_points[::step]
+        # Assure que le dernier point est inclus
+        if displayed[-1] != summary.profile_points[-1]:
+            displayed.append(summary.profile_points[-1])
+        for km, ele in displayed:
+            bar_len = max(0, int((ele - summary.min_elevation) / max(1,
+                                                                     summary.max_elevation - summary.min_elevation) * 30))
             bar = "█" * bar_len
             lines.append(f"  km {km:>5.0f} | {ele:>4.0f}m | {bar}")
 
