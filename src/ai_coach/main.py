@@ -385,6 +385,17 @@ def cmd_metrics() -> None:
     if vo2:
         print(f"\n   🫁 VO2max estimée : {vo2:.1f} ml/kg/min")
 
+def cmd_power_curve() -> None:
+    """Génère le graphe de power curve."""
+    from ai_coach.charts import plot_power_curve
+    print("⚡ Génération de la power curve...")
+    path = plot_power_curve()
+    if path:
+        print(f"✅ Graphe généré : {path}")
+    else:
+        print("❌ Échec de la génération.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="ai-coach")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -421,6 +432,7 @@ def main() -> None:
     )
     subparsers.add_parser("metrics", help="Métriques avancées (monotonie, projection, durabilité, FTP, profil)")
 
+    subparsers.add_parser("power_curve", help="Graphe de power curve")
 
     args = parser.parse_args()
 
@@ -445,7 +457,8 @@ def main() -> None:
         cmd_session(date_str=args.date)
     elif args.command == "metrics":
         cmd_metrics()
-
+    elif args.command == "power_curve":
+            cmd_power_curve()
 
 if __name__ == "__main__":
     main()

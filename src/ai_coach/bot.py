@@ -127,9 +127,118 @@ async def help_coach(ctx: commands.Context) -> None:
         "`!forget_last` — supprime le dernier échange\n"
         "`!enrich [max]` — enrichit les séances (détails + intervalles)\n"
         "`!session <date|last>` — graphe détaillé d'une séance\n"
+        "`!power_curve` — graphe de ta courbe de puissance\n"
+        "`!gpx [date] + fichier .gpx` — analyse de parcours + stratégie\n"
         "`!help_coach` — cette aide\n"
     )
     await ctx.send(text)
+
+@bot.command(name="gpx")
+async def cmd_gpx(ctx: commands.Context, target_date: str = "", *, question: str = "") -> None:
+    """
+    Analyse un fichier GPX attaché au message.
+    Usage: !gpx 2026-05-25 (attacher le fichier .gpx)
+    Optionnel: !gpx 2026-05-25 Quelle stratégie pour cette course ?
+    """
+    # Vérifie qu'un fichier est attaché
+    if not ctx.message.attachments:
+        await ctx.send(
+            "❌ Attache un fichier .gpx à ton message.\n"
+            "Usage : `!gpx 2026-05-25` + fichier .gpx en pièce jointe\n"
+            "La date est optionnelle (pour la météo)."
+        )
+        return
+
+    attachment = ctx.message.attachments[0]
+    if not attachment.filename.lower().endswith(".gpx"):
+        await ctx.send("❌ Le fichier doit être un .gpx")
+        return
+
+    await ctx.send(f"🗺️ Analyse de **{attachment.filename}**...")
+
+    async with ctx.typing():
+        try:
+            # Télécharge le GPX
+            gpx_bytes = await attachment.read()
+            gpx_content = gpx_bytes.decode("utf-8")
+
+            # Parse et analyse
+            from ai_coach.gpx import analyze_gpx, format_gpx_for_llm
+            summary = analyze_gpx(gpx_content)
+
+            # Météo si date fournie
+            weather_data = None
+            if target_date:
+                from ai_coach.weather import fetch_forecast
+                weather_data = fetch_forecast(
+                    latitude=summary.start_lat,
+                    longitude=summary.start_lon,
+                )
+
+            # Charge le profil pour FTP et poids
+            try:
+                from ai_coach.profile import load_profile
+                profile = load_profile()
+                ftp = profile.get("athlete", {}).get("ftp_watts", 310)
+                weight = profile.get("athlete", {}).get("weight_kg", 63.0)
+            except Exception:
+                ftp, weight = 310, 63.0
+
+            # Formate pour le LLM
+            gpx_text = format_gpx_for_llm(
+                summary,
+                weather=weather_data,
+                target_date=target_date if target_date else None,
+                ftp=ftp,
+                weight_kg=weight,
+            )
+
+            # Envoie d'abord le résumé brut
+            await send_long(ctx, "```\n" + gpx_text + "\n```")
+
+            # Puis demande au coach une stratégie
+            if not question:
+                question = (
+                    f"Voici un parcours que je vais faire"
+                    f"{' le ' + target_date if target_date else ' prochainement'}. "
+                    f"Donne-moi : 1) ton analyse du parcours (difficultés, points clés), "
+                    f"2) une stratégie de gestion de l'effort (puissance cible par section), "
+                    f"3) un plan nutrition/hydratation, "
+                    f"4) des recommandations spécifiques vu mon profil."
+                )
+
+            result = _load_report_or_error()
+            if isinstance(result, str):
+                await ctx.send(result)
+                return
+
+            # Injecte le GPX dans la question
+            full_question = f"{gpx_text}\n\n{question}"
+
+            metadata = {
+                "discord_user": str(ctx.author),
+                "discord_channel": str(ctx.channel),
+                "gpx_file": attachment.filename,
+            }
+
+            answer = await ask_coach_async(
+                full_question, result,
+                source="discord",
+                metadata=metadata,
+                max_tokens=3000,
+                light=False,
+            )
+
+        except ValueError as e:
+            await ctx.send(f"❌ GPX invalide : {e}")
+            return
+        except Exception as e:
+            log.exception("gpx analysis failed")
+            await ctx.send(f"❌ Erreur : {e}")
+            return
+
+    await send_long(ctx, answer)
+
 
 @bot.command(name="session")
 async def cmd_session(ctx: commands.Context, *, date_str: str = "last") -> None:
@@ -282,6 +391,26 @@ async def cmd_plan(ctx: commands.Context, days: int = 7) -> None:
             return
 
     await send_long(ctx, plan_text)
+
+@bot.command(name="power_curve")
+async def cmd_power_curve(ctx: commands.Context) -> None:
+    """Envoie le graphe de power curve."""
+    from ai_coach.charts import plot_power_curve
+
+    await ctx.send("⚡ Génération de la power curve...")
+    async with ctx.typing():
+        try:
+            path = plot_power_curve()
+        except Exception as e:
+            log.exception("power_curve failed")
+            await ctx.send(f"❌ Erreur : {e}")
+            return
+
+    if path and Path(path).exists():
+        await ctx.send(file=discord.File(str(path)))
+    else:
+        await ctx.send("❌ Impossible de générer le graphe.")
+
 
 @bot.command(name="refresh")
 async def cmd_refresh(ctx: commands.Context, days: int = 180) -> None:

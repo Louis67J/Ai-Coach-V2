@@ -272,3 +272,171 @@ def plot_session(
     plt.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return path
+
+def plot_power_curve(filename: str = "power_curve.png") -> Path | None:
+    """
+    Génère le graphe de power curve avec les niveaux Coggan en overlay.
+    Utilise les données de l'API Intervals.icu.
+    """
+    from ai_coach.intervals import fetch_power_curves
+
+    curve = fetch_power_curves()
+    if not curve or "secs" not in curve or "values" not in curve:
+        print("❌ Impossible de récupérer la power curve.")
+        return None
+
+    secs = curve["secs"]
+    watts = curve["values"]
+    wkg = curve.get("watts_per_kg", [])
+    weight = curve.get("weight", 63.0)
+    period_start = (curve.get("start_date_local") or "?")[:10]
+    period_end = (curve.get("end_date_local") or "?")[:10]
+
+    if not secs or not watts:
+        return None
+
+    # Convertit les secondes en labels lisibles pour l'axe X
+    import numpy as np
+
+    secs_arr = np.array(secs, dtype=float)
+    watts_arr = np.array(watts, dtype=float)
+
+    # --- Figure à 2 panels : Watts + W/kg ---
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(13, 8), sharex=True,
+                                     gridspec_kw={"hspace": 0.08, "height_ratios": [1.2, 1]})
+
+    # Couleur par zone (basée sur FTP)
+    ftp = 310  # FTP de référence
+    models = curve.get("powerModels", [])
+    for pm in models:
+        if pm.get("type") == "ECP" and pm.get("ftp"):
+            ftp = pm["ftp"]
+            break
+
+    zone_thresholds = [
+        (0.56, "#bbbbbb", "Z1"), (0.76, "#4a90d9", "Z2"), (0.91, "#2ecc71", "Z3"),
+        (1.06, "#f39c12", "Z4"), (1.20, "#e74c3c", "Z5"), (1.50, "#9b59b6", "Z6"),
+        (99, "#e91e63", "Z7"),
+    ]
+
+    def get_color(w):
+        pct = w / ftp if ftp else 0
+        for threshold, color, _ in zone_thresholds:
+            if pct < threshold:
+                return color
+        return "#e91e63"
+
+    # Panel 1 : Watts
+    for i in range(1, len(secs_arr)):
+        color = get_color(watts_arr[i])
+        ax1.plot([secs_arr[i-1], secs_arr[i]], [watts_arr[i-1], watts_arr[i]],
+                 color=color, linewidth=2, solid_capstyle="round")
+
+    # Lignes de référence FTP
+    ax1.axhline(ftp, color="#e74c3c", linewidth=1, linestyle="--", alpha=0.5, label=f"FTP {ftp}W")
+    ax1.axhline(ftp * 0.76, color="#4a90d9", linewidth=0.5, linestyle=":", alpha=0.3)
+    ax1.axhline(ftp * 0.91, color="#2ecc71", linewidth=0.5, linestyle=":", alpha=0.3)
+
+    # Marqueurs aux durées clés
+    key_durations = {5: "5s", 60: "1min", 300: "5min", 1200: "20min", 3600: "60min"}
+    for target_s, label in key_durations.items():
+        closest_idx = min(range(len(secs)), key=lambda i: abs(secs[i] - target_s))
+        w = watts[closest_idx]
+        ax1.plot(secs[closest_idx], w, "o", color="#333333", markersize=6, zorder=5)
+        ax1.annotate(
+            f"{label}\n{w}W",
+            xy=(secs[closest_idx], w),
+            textcoords="offset points", xytext=(10, 10),
+            fontsize=8, fontweight="bold",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8, edgecolor="#cccccc"),
+            arrowprops=dict(arrowstyle="-", color="#999999", lw=0.5),
+        )
+
+    ax1.set_ylabel("Puissance (W)", fontsize=10)
+    ax1.set_xscale("log")
+    ax1.set_ylim(0, max(watts) * 1.1)
+    ax1.grid(True, alpha=0.2, which="both")
+    ax1.legend(loc="upper right", fontsize=8)
+    ax1.set_title(
+        f"Power Curve — {period_start} → {period_end} ({weight}kg)",
+        fontsize=12, fontweight="bold",
+    )
+
+    # Panel 2 : W/kg avec niveaux Coggan
+    if wkg:
+        wkg_arr = np.array(wkg, dtype=float)
+        for i in range(1, len(secs_arr)):
+            color = get_color(watts_arr[i])
+            ax2.plot([secs_arr[i-1], secs_arr[i]], [wkg_arr[i-1], wkg_arr[i]],
+                     color=color, linewidth=2, solid_capstyle="round")
+
+        # Bandes de niveaux Coggan (approximatif, pour les durées 1-60min)
+        coggan_bands = [
+            (3.0, "Moyen", "#f0f0f0"),
+            (4.0, "Bon", "#e8f5e9"),
+            (5.0, "Très bon", "#c8e6c9"),
+            (5.5, "Excellent", "#a5d6a7"),
+            (6.5, "Exceptionnel", "#81c784"),
+        ]
+        for threshold, label, color in coggan_bands:
+            ax2.axhline(threshold, color="#999999", linewidth=0.5, linestyle=":", alpha=0.4)
+            ax2.text(secs_arr[-1] * 0.7, threshold + 0.05, label,
+                     fontsize=7, color="#888888", alpha=0.7)
+
+        # Marqueurs aux durées clés
+        for target_s, label in key_durations.items():
+            closest_idx = min(range(len(secs)), key=lambda i: abs(secs[i] - target_s))
+            w_kg = wkg[closest_idx]
+            ax2.plot(secs[closest_idx], w_kg, "o", color="#333333", markersize=5, zorder=5)
+            ax2.annotate(
+                f"{w_kg:.1f}",
+                xy=(secs[closest_idx], w_kg),
+                textcoords="offset points", xytext=(8, 5),
+                fontsize=8, fontweight="bold",
+                bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.8, edgecolor="#cccccc"),
+            )
+
+        ax2.set_ylabel("W/kg", fontsize=10)
+        ax2.set_ylim(0, max(wkg) * 1.1)
+        ax2.grid(True, alpha=0.2, which="both")
+
+    # Axe X : labels lisibles
+    tick_positions = [5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600, 7200, 14400]
+    tick_labels = ["5s", "10s", "30s", "1min", "2min", "5min", "10min", "20min", "30min", "1h", "2h", "4h"]
+    # Filtre les ticks qui sont dans la plage
+    valid_ticks = [(p, l) for p, l in zip(tick_positions, tick_labels) if p <= max(secs)]
+    if valid_ticks:
+        ax2.set_xticks([p for p, _ in valid_ticks])
+        ax2.set_xticklabels([l for _, l in valid_ticks])
+    ax2.set_xlabel("Durée", fontsize=10)
+
+    # Légende des zones
+    from matplotlib.patches import Patch
+    zone_labels = [
+        ("Z1", "#bbbbbb"), ("Z2", "#4a90d9"), ("Z3", "#2ecc71"),
+        ("Z4", "#f39c12"), ("Z5", "#e74c3c"), ("Z6", "#9b59b6"),
+    ]
+    legend_patches = [Patch(facecolor=c, label=l, alpha=0.7) for l, c in zone_labels]
+    fig.legend(handles=legend_patches, loc="lower center", ncol=6,
+               fontsize=7, frameon=False, bbox_to_anchor=(0.5, -0.02))
+
+    # Modèles de puissance en annotation
+    model_text_parts = []
+    for pm in models:
+        pm_type = pm.get("type", "?")
+        cp = pm.get("criticalPower")
+        w_prime = pm.get("wPrime")
+        if cp and w_prime:
+            model_text_parts.append(f"{pm_type}: CP={cp}W, W'={round(w_prime/1000, 1)}kJ")
+    if model_text_parts:
+        model_text = "\n".join(model_text_parts[:2])  # Max 2 modèles
+        ax1.text(0.02, 0.02, model_text, transform=ax1.transAxes,
+                 fontsize=7, verticalalignment="bottom",
+                 bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
+
+    fig.subplots_adjust(left=0.08, right=0.95, top=0.93, bottom=0.08)
+
+    path = OUTPUTS_DIR / filename
+    plt.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return path
