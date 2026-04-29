@@ -413,17 +413,21 @@ async def cmd_power_curve(ctx: commands.Context) -> None:
 
 
 @bot.command(name="refresh")
-async def cmd_refresh(ctx: commands.Context, days: int = 180) -> None:
+async def cmd_refresh(ctx: commands.Context, days: int = 730) -> None:
     """Re-fetch les activités depuis Intervals.icu."""
     await ctx.send(f"📡 Fetch Intervals.icu ({days} jours)...")
     async with ctx.typing():
         try:
-            activities = refresh_cache(days=days)
+            import asyncio
+            import functools
+            activities = await asyncio.get_event_loop().run_in_executor(
+                None,
+                functools.partial(refresh_cache, days=days),
+            )
         except Exception as e:
             log.exception("refresh failed")
             await ctx.send(f"❌ Fetch failed : {e}")
             return
-
     await ctx.send(f"✅ {len(activities)} activités en cache.")
 
 
@@ -534,9 +538,14 @@ async def cmd_enrich(ctx: commands.Context, max_new: int = 10) -> None:
     await ctx.send(f"🔬 Enrichissement en cours (max {max_new} nouvelles séances)...")
     async with ctx.typing():
         try:
+            import asyncio
+            import functools
             activities = load_cached_activities()
             from ai_coach.intervals import enrich_sessions
-            sessions = enrich_sessions(activities, max_new=max_new)
+            sessions = await asyncio.get_event_loop().run_in_executor(
+                None,
+                functools.partial(enrich_sessions, activities, max_new=max_new),
+            )
         except Exception as e:
             log.exception("enrich failed")
             await ctx.send(f"❌ Erreur: {e}")
