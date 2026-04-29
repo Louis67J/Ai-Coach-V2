@@ -90,6 +90,13 @@ Métriques (conventions TrainingPeaks) :
   * TSB -10 à 0 : charge productive
   * TSB -20 à -10 : chargé, surveillance
   * TSB < -20 : surcharge
+- Adapte la longueur de ta réponse à la complexité de la question.
+  * Question simple ("comment je vais ?") → 3-5 lignes max
+  * Question d'analyse ("analyse mes 5 dernières séances") → réponse structurée complète
+  * Plan d'entraînement → détaillé mais sans bavardage
+- Pas d'emojis sauf pour les indicateurs visuels de statut (✅ ⚠️ 🚨).
+- Pas de titres markdown (##) pour les réponses courtes.
+- Va droit au but. Pas de "Bien sûr !", "Excellente question !", ou reformulation de la question.
 """
 
 
@@ -360,6 +367,7 @@ def ask_coach(
     metadata: dict[str, Any] | None = None,
     history_limit: int = 20,
     persist: bool = True,
+    light: bool = False,
 ) -> str:
     """
     Pose une question au coach avec profil + calendrier + rapport + historique conversationnel.
@@ -404,16 +412,42 @@ def ask_coach(
     history = load_recent_exchanges(limit=history_limit)
     history_messages = to_anthropic_messages(history)
 
-    # Construction du dernier message user :
-    # contexte fraîchement calculé + question
-    current_user_message = (
-        f"{profile_text}\n\n"
-        f"{calendar_text}\n\n"
-        f"{weather_text}\n\n"
-        f"{wellness_text}\n\n"
-        f"{report_text}\n\n"
-        f"=== Ma question ===\n{question}"
+    # Mode léger : questions courtes = contexte réduit
+    # On détecte automatiquement si la question est simple
+    is_simple = len(question.split()) < 15 and not any(
+        kw in question.lower()
+        for kw in ("analyse", "plan", "séance", "semaine", "détail", "compare",
+                   "historique", "progression", "intervalle", "session")
     )
+
+    if light or is_simple:
+        # Contexte minimal : juste profil résumé + fitness actuelle + wellness
+        report_text_short = ""
+        cf = report.get("current_fitness", {})
+        if cf:
+            report_text_short = (
+                f"Forme actuelle : CTL={cf.get('ctl')} ATL={cf.get('atl')} TSB={cf.get('tsb')}"
+            )
+        current_user_message = (
+            f"{profile_text}\n\n"
+            f"{calendar_text}\n\n"
+            f"{wellness_text}\n\n"
+            f"{report_text_short}\n\n"
+            f"=== Ma question ===\n{question}\n\n"
+            f"INSTRUCTION : question simple → réponds en 3 à 5 lignes maximum. "
+            f"Pas de tableau, pas de titres markdown, pas d'analyse détaillée. "
+            f"Juste l'essentiel en quelques phrases."
+        )
+        max_tokens = min(max_tokens, 500)
+    else:
+        current_user_message = (
+            f"{profile_text}\n\n"
+            f"{calendar_text}\n\n"
+            f"{weather_text}\n\n"
+            f"{wellness_text}\n\n"
+            f"{report_text}\n\n"
+            f"=== Ma question ===\n{question}"
+        )
 
     # Liste finale de messages : historique passé + question actuelle
     messages = history_messages + [
@@ -473,6 +507,7 @@ async def ask_coach_async(
     metadata: dict[str, Any] | None = None,
     history_limit: int = 20,
     persist: bool = True,
+    light: bool = False,
 ) -> str:
     """
     Version async de ask_coach, pour le bot Discord.
@@ -495,6 +530,7 @@ async def ask_coach_async(
             metadata=metadata,
             history_limit=history_limit,
             persist=persist,
+            light=light,
         ),
     )
     return answer

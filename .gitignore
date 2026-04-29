@@ -13,6 +13,8 @@ env/
 
 # Données et outputs (générés, pas versionnés)
 data/
+!data/profile.json
+!data/sessions.json
 outputs/
 *.log
 
