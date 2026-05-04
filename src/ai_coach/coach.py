@@ -24,6 +24,8 @@ from ai_coach.weather import fetch_forecast, format_weather_for_llm
 
 from ai_coach.wellness import fetch_wellness, build_wellness_summary, format_wellness_for_llm
 
+from ai_coach.journal import format_journal_for_llm, load_recent_entries
+
 # Modèle par défaut. Overridable via env var ANTHROPIC_MODEL.
 DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
 
@@ -97,6 +99,11 @@ Métriques (conventions TrainingPeaks) :
 - Pas d'emojis sauf pour les indicateurs visuels de statut (✅ ⚠️ 🚨).
 - Pas de titres markdown (##) pour les réponses courtes.
 - Va droit au but. Pas de "Bien sûr !", "Excellente question !", ou reformulation de la question.
+
+- Quand l'athlète fournit un RPE, croise-le avec les données objectives (TSS, FC, puissance).
+  Un RPE élevé pour un TSS bas = possible fatigue accumulée, stress, maladie, sous-nutrition.
+  Un RPE bas pour un TSS élevé = bonne forme, adaptation réussie.
+- Encourage l'athlète à utiliser le journal RPE après chaque séance importante.
 """
 
 
@@ -405,12 +412,28 @@ def ask_coach(
     wellness_summary = build_wellness_summary(wellness_data)
     wellness_text = format_wellness_for_llm(wellness_summary) if wellness_summary else ""
 
+    # Journal RPE
+    journal_entries = load_recent_entries(limit=14)
+    journal_text = format_journal_for_llm(journal_entries) if journal_entries else ""
+
     # Rapport d'analyse
     report_text = _format_report_for_llm(report)
 
     # Historique conversationnel précédent
     history = load_recent_exchanges(limit=history_limit)
     history_messages = to_anthropic_messages(history)
+
+    # Résumé de mémoire long terme (conversations anciennes compactées)
+    from ai_coach.memory import load_memory_summary, summarize_old_exchanges
+    # Auto-compacte si nécessaire
+    summarize_old_exchanges(keep_recent=15, summary_trigger=25)
+    memory_summary = load_memory_summary()
+    memory_summary_text = ""
+    if memory_summary:
+        memory_summary_text = (
+            f"\n=== MÉMOIRE LONG TERME (résumé de nos conversations passées) ===\n"
+            f"{memory_summary}\n"
+        )
 
     # Mode léger : questions courtes = contexte réduit
     # On détecte automatiquement si la question est simple
@@ -432,6 +455,8 @@ def ask_coach(
             f"{profile_text}\n\n"
             f"{calendar_text}\n\n"
             f"{wellness_text}\n\n"
+            f"{journal_text}\n\n"
+            f"{memory_summary_text}\n\n"
             f"{report_text_short}\n\n"
             f"=== Ma question ===\n{question}\n\n"
             f"INSTRUCTION : question simple → réponds en 3 à 5 lignes maximum. "
@@ -445,6 +470,8 @@ def ask_coach(
             f"{calendar_text}\n\n"
             f"{weather_text}\n\n"
             f"{wellness_text}\n\n"
+            f"{journal_text}\n\n"
+            f"{memory_summary_text}\n\n"
             f"{report_text}\n\n"
             f"=== Ma question ===\n{question}"
         )

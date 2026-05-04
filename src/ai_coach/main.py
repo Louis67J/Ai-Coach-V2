@@ -119,9 +119,18 @@ def cmd_analyze() -> None:
     fitness_df = compute_fitness(daily_tss)
     weekly = compute_weekly_load(daily_tss)
 
+    # Charge objectifs et projections pour le graphe fitness
+    objectives = []
+    try:
+        from ai_coach.profile import load_profile
+        profile_data = load_profile()
+        objectives = profile_data.get("season_2026_objectives", [])
+    except Exception:
+        pass
+
     charts_generated = []
     for path in [
-        plot_fitness(fitness_df),
+        plot_fitness(fitness_df, objectives=objectives, forecast=report.get("ctl_forecast", [])),
         plot_weekly_load(weekly),
         plot_sport_breakdown(report["sport_breakdown"]),
     ]:

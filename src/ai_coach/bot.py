@@ -129,6 +129,10 @@ async def help_coach(ctx: commands.Context) -> None:
         "`!session <date|last>` — graphe détaillé d'une séance\n"
         "`!power_curve` — graphe de ta courbe de puissance\n"
         "`!gpx [date] + fichier .gpx` — analyse de parcours + stratégie\n"
+        "`!fitness_html` — graphe fitness interactif (HTML)\n"
+        "`!session_html <date|last>` — graphe séance interactif (HTML)\n"
+        "`!rpe <1-10> [notes]` — enregistre ton RPE post-séance\n"
+        "`!journal [n]` — affiche les dernières entrées RPE\n"
         "`!help_coach` — cette aide\n"
     )
     await ctx.send(text)
@@ -238,6 +242,72 @@ async def cmd_gpx(ctx: commands.Context, target_date: str = "", *, question: str
             return
 
     await send_long(ctx, answer)
+
+@bot.command(name="rpe")
+async def cmd_rpe(ctx: commands.Context, rpe: int, *, notes: str = "") -> None:
+    """
+    Enregistre ton RPE + sensations après une séance.
+    Usage: !rpe 7 Jambes lourdes, TFL un peu sensible
+    Usage: !rpe 5 (sans notes)
+    """
+    if rpe < 1 or rpe > 10:
+        await ctx.send("❌ RPE entre 1 et 10.")
+        return
+
+    from ai_coach.journal import add_entry
+
+    # Détecte des tags automatiques dans les notes
+    tags = []
+    notes_lower = notes.lower()
+    tag_keywords = {
+        "fatigue": ["fatigué", "fatigue", "crevé", "cassé", "vidé"],
+        "douleur": ["douleur", "mal", "tendin", "tfl", "genou", "hanche", "psoas"],
+        "motivation": ["motivé", "motivation", "envie", "plaisir", "fun"],
+        "sommeil": ["dormi", "sommeil", "insomnie", "nuit"],
+        "nutrition": ["mangé", "nutrition", "faim", "glucides", "hydra"],
+        "météo": ["pluie", "vent", "froid", "chaud", "chaleur"],
+        "maladie": ["malade", "rhume", "fièvre", "gorge"],
+    }
+    for tag, keywords in tag_keywords.items():
+        if any(kw in notes_lower for kw in keywords):
+            tags.append(tag)
+
+    entry = add_entry(rpe=rpe, notes=notes, tags=tags)
+
+    # Réponse avec indicateur visuel
+    if rpe <= 3:
+        emoji = "🟢 Facile"
+    elif rpe <= 5:
+        emoji = "🟡 Modéré"
+    elif rpe <= 7:
+        emoji = "🟠 Dur"
+    else:
+        emoji = "🔴 Très dur"
+
+    response = f"✅ RPE {rpe}/10 enregistré ({emoji})"
+    if tags:
+        response += f"\n📌 Tags détectés : {', '.join(tags)}"
+    if notes:
+        response += f"\n💬 {notes[:100]}"
+
+    await ctx.send(response)
+
+
+@bot.command(name="journal")
+async def cmd_journal(ctx: commands.Context, n: int = 7) -> None:
+    """Affiche les N dernières entrées du journal RPE."""
+    from ai_coach.journal import format_journal_for_llm, load_recent_entries, count_entries
+
+    entries = load_recent_entries(limit=n)
+    total = count_entries()
+
+    if not entries:
+        await ctx.send("📝 Journal vide. Utilise `!rpe <1-10> [notes]` après chaque séance.")
+        return
+
+    text = format_journal_for_llm(entries)
+    header = f"📝 **Journal RPE** — {total} entrée(s) au total, {len(entries)} affichée(s) :\n"
+    await send_long(ctx, header + text)
 
 
 @bot.command(name="session")
@@ -433,14 +503,12 @@ async def cmd_refresh(ctx: commands.Context, days: int = 730) -> None:
 
 @bot.command(name="fitness")
 async def cmd_fitness(ctx: commands.Context) -> None:
-    """Envoie le graphe CTL/ATL/TSB."""
-    # On déclenche une analyse pour régénérer le graphe au frais
+    """Envoie le graphe CTL/ATL/TSB avec objectifs et projections."""
     result = _load_report_or_error()
     if isinstance(result, str):
         await ctx.send(result)
         return
 
-    # Regénère les graphes (on réutilise la logique de cmd_analyze en léger)
     from ai_coach.analysis import build_daily_tss, compute_fitness, filter_usable
     from ai_coach.charts import plot_fitness
 
@@ -448,13 +516,109 @@ async def cmd_fitness(ctx: commands.Context) -> None:
     usable = filter_usable(activities)
     daily_tss = build_daily_tss(usable)
     fitness_df = compute_fitness(daily_tss)
-    path = plot_fitness(fitness_df)
+
+    # Charge les objectifs depuis le profil
+    objectives = []
+    forecast = result.get("ctl_forecast", [])
+    try:
+        from ai_coach.profile import load_profile
+        profile = load_profile()
+        objectives = profile.get("season_2026_objectives", [])
+    except Exception:
+        pass
+
+    async with ctx.typing():
+        import asyncio
+        path = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: plot_fitness(fitness_df, objectives=objectives, forecast=forecast),
+        )
 
     if not path or not Path(path).exists():
         await ctx.send("❌ Impossible de générer le graphe.")
         return
-
     await ctx.send(file=discord.File(str(path)))
+
+@bot.command(name="fitness_html")
+async def cmd_fitness_html(ctx: commands.Context) -> None:
+    """Envoie le graphe fitness interactif (HTML)."""
+    result = _load_report_or_error()
+    if isinstance(result, str):
+        await ctx.send(result)
+        return
+
+    from ai_coach.analysis import build_daily_tss, compute_fitness, filter_usable
+    from ai_coach.charts_interactive import plot_fitness_interactive
+
+    activities = load_cached_activities()
+    usable = filter_usable(activities)
+    daily_tss = build_daily_tss(usable)
+    fitness_df = compute_fitness(daily_tss)
+
+    objectives = []
+    forecast = result.get("ctl_forecast", [])
+    try:
+        from ai_coach.profile import load_profile
+        profile = load_profile()
+        objectives = profile.get("season_2026_objectives", [])
+    except Exception:
+        pass
+
+    async with ctx.typing():
+        import asyncio
+        path = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: plot_fitness_interactive(fitness_df, objectives=objectives, forecast=forecast),
+        )
+
+    if path and Path(path).exists():
+        await ctx.send("📊 Graphe interactif — ouvre le fichier dans ton navigateur :",
+                       file=discord.File(str(path)))
+    else:
+        await ctx.send("❌ Impossible de générer le graphe.")
+
+
+@bot.command(name="session_html")
+async def cmd_session_html(ctx: commands.Context, *, date_str: str = "last") -> None:
+    """Envoie un graphe de séance interactif (HTML)."""
+    from ai_coach.intervals import fetch_activity_streams, load_enriched_sessions
+    from ai_coach.charts_interactive import plot_session_interactive
+
+    sessions = load_enriched_sessions()
+    if date_str.lower() in ("last", "derniere", "dernière"):
+        bike = [s for s in sessions if s.get("type") in ("Ride", "VirtualRide")]
+        if not bike:
+            await ctx.send("❌ Aucune séance vélo enrichie.")
+            return
+        target = max(bike, key=lambda s: s.get("date", ""))
+    else:
+        matching = [s for s in sessions if date_str in s.get("date", "")]
+        if not matching:
+            await ctx.send(f"❌ Aucune séance trouvée pour '{date_str}'.")
+            return
+        target = max(matching, key=lambda s: s.get("tss", 0))
+
+    await ctx.send(f"📊 Génération graphe interactif **{target.get('name')}**...")
+
+    async with ctx.typing():
+        import asyncio
+        import functools
+        streams = await asyncio.get_event_loop().run_in_executor(
+            None,
+            functools.partial(fetch_activity_streams, target["id"]),
+        )
+        if not streams:
+            await ctx.send("❌ Impossible de charger les streams.")
+            return
+        path = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: plot_session_interactive(streams, session_summary=target),
+        )
+
+    if path and Path(path).exists():
+        await ctx.send(file=discord.File(str(path)))
+    else:
+        await ctx.send("❌ Échec de la génération.")
 
 @bot.command(name="profile")
 async def cmd_profile(ctx: commands.Context) -> None:

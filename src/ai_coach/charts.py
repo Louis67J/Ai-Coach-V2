@@ -15,39 +15,120 @@ import numpy as np
 from ai_coach.config import OUTPUTS_DIR
 
 
-def plot_fitness(fitness_df: pd.DataFrame, filename: str = "fitness.png") -> Path | None:
+def plot_fitness(
+    fitness_df: pd.DataFrame,
+    objectives: list[dict] | None = None,
+    forecast: list[dict] | None = None,
+    filename: str = "fitness.png",
+) -> Path | None:
     """
-    Graphe CTL / ATL / TSB classique.
-    fitness_df : DataFrame avec colonnes ['tss', 'ctl', 'atl', 'tsb']
+    Graphe CTL/ATL/TSB avec marqueurs de courses et projections.
+
+    Args:
+        fitness_df: DataFrame avec colonnes tss/ctl/atl/tsb
+        objectives: liste d'objectifs [{name, date, priority}, ...]
+        forecast: projections CTL [{target_date, projected_ctl}, ...]
     """
     if fitness_df.empty:
         return None
 
-    fig, ax1 = plt.subplots(figsize=(11, 5))
+    fig, ax1 = plt.subplots(figsize=(13, 6))
 
-    # Barres TSS quotidiennes en arrière-plan (axe de gauche)
-    ax1.bar(fitness_df.index, fitness_df["tss"], color="#cccccc", width=1, label="TSS")
-    ax1.set_ylabel("TSS quotidien", color="#888888")
-    ax1.tick_params(axis="y", labelcolor="#888888")
+    # Barres TSS quotidiennes en arrière-plan
+    ax1.bar(fitness_df.index, fitness_df["tss"], color="#dddddd", width=1, label="TSS", zorder=1)
+    ax1.set_ylabel("TSS quotidien", color="#aaaaaa", fontsize=9)
+    ax1.tick_params(axis="y", labelcolor="#aaaaaa")
 
-    # CTL / ATL / TSB au premier plan (axe de droite)
+    # CTL / ATL / TSB au premier plan
     ax2 = ax1.twinx()
-    ax2.plot(fitness_df.index, fitness_df["ctl"], label="CTL (forme)", linewidth=2, color="#1f77b4")
-    ax2.plot(fitness_df.index, fitness_df["atl"], label="ATL (fatigue)", linewidth=2, color="#d62728")
-    ax2.plot(fitness_df.index, fitness_df["tsb"], label="TSB (fraîcheur)", linewidth=1.5, color="#2ca02c", linestyle="--")
-    ax2.axhline(0, color="black", linewidth=0.5, alpha=0.3)
-    ax2.set_ylabel("CTL / ATL / TSB")
-    ax2.legend(loc="upper left")
+    ax2.plot(fitness_df.index, fitness_df["ctl"], label="CTL (forme)",
+             linewidth=2.5, color="#1f77b4", zorder=3)
+    ax2.plot(fitness_df.index, fitness_df["atl"], label="ATL (fatigue)",
+             linewidth=2, color="#d62728", alpha=0.8, zorder=3)
+    ax2.plot(fitness_df.index, fitness_df["tsb"], label="TSB (fraîcheur)",
+             linewidth=1.5, color="#2ca02c", linestyle="--", alpha=0.7, zorder=3)
 
-    plt.title("Forme & Fatigue (CTL / ATL / TSB)")
+    # Zone TSB colorée
+    ax2.fill_between(fitness_df.index, fitness_df["tsb"], 0,
+                     where=fitness_df["tsb"] >= 0, alpha=0.08, color="#2ca02c", zorder=2)
+    ax2.fill_between(fitness_df.index, fitness_df["tsb"], 0,
+                     where=fitness_df["tsb"] < 0, alpha=0.08, color="#d62728", zorder=2)
+    ax2.axhline(0, color="black", linewidth=0.5, alpha=0.3)
+
+    # Zones TSB annotées
+    ax2.axhspan(5, 30, alpha=0.03, color="#2ca02c")
+    ax2.axhspan(-10, 0, alpha=0.03, color="#f39c12")
+    ax2.axhspan(-30, -10, alpha=0.03, color="#d62728")
+
+    ax2.set_ylabel("CTL / ATL / TSB")
+
+    # --- Marqueurs d'objectifs (courses) ---
+    if objectives:
+        import matplotlib.dates as mdates
+        for obj in objectives:
+            try:
+                obj_date = pd.to_datetime(obj.get("date"))
+                priority = obj.get("priority", "C")
+                name = obj.get("name", "?")[:25]
+                color = {"A": "#e74c3c", "B": "#f39c12", "C": "#3498db"}.get(priority, "#999999")
+                marker_size = {"A": 12, "B": 10, "C": 8}.get(priority, 8)
+
+                # Ligne verticale
+                ax2.axvline(obj_date, color=color, linewidth=1.5, linestyle="--", alpha=0.6, zorder=4)
+                # Label
+                ax2.annotate(
+                    f"{'🏆' if priority == 'A' else '🎯'} {name}",
+                    xy=(obj_date, ax2.get_ylim()[1] * 0.9),
+                    fontsize=8, fontweight="bold", color=color,
+                    rotation=45, ha="left", va="bottom",
+                    bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.8, edgecolor=color),
+                )
+            except Exception:
+                continue
+
+    # --- Projection CTL ---
+    if forecast:
+        try:
+            last_date = fitness_df.index[-1]
+            last_ctl = float(fitness_df["ctl"].iloc[-1])
+
+            proj_dates = [last_date]
+            proj_ctls = [last_ctl]
+            for f in forecast:
+                proj_dates.append(pd.to_datetime(f["target_date"]))
+                proj_ctls.append(f["projected_ctl"])
+
+            ax2.plot(proj_dates, proj_ctls, linewidth=2, color="#1f77b4",
+                     linestyle=":", alpha=0.5, zorder=3, label="CTL projeté")
+
+            # Annotation du CTL projeté final
+            ax2.annotate(
+                f"CTL projeté\n{proj_ctls[-1]:.0f}",
+                xy=(proj_dates[-1], proj_ctls[-1]),
+                textcoords="offset points", xytext=(10, -5),
+                fontsize=8, color="#1f77b4",
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8),
+                arrowprops=dict(arrowstyle="->", color="#1f77b4"),
+            )
+        except Exception:
+            pass
+
+    # Marqueur "aujourd'hui"
+    today = pd.to_datetime("today")
+    if fitness_df.index.min() <= today <= fitness_df.index.max() + pd.Timedelta(days=45):
+        ax2.axvline(today, color="#333333", linewidth=1, linestyle="-", alpha=0.3)
+        ax2.text(today, ax2.get_ylim()[1] * 0.95, " aujourd'hui",
+                 fontsize=7, color="#333333", alpha=0.5)
+
+    ax2.legend(loc="upper left", fontsize=8)
+    plt.title("Forme & Fatigue (CTL / ATL / TSB)", fontsize=12, fontweight="bold")
     fig.autofmt_xdate()
-    plt.tight_layout()
+    fig.subplots_adjust(left=0.08, right=0.92, top=0.92, bottom=0.12)
 
     path = OUTPUTS_DIR / filename
-    plt.savefig(path, dpi=120)
+    plt.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return path
-
 
 def plot_weekly_load(weekly_series: pd.Series, filename: str = "weekly_load.png") -> Path | None:
     """Barres de TSS hebdomadaire."""

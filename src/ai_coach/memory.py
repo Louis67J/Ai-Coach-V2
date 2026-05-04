@@ -168,3 +168,99 @@ def format_recent_for_display(limit: int = 5) -> str:
         lines.append(f"💬 {a_short}")
         lines.append("")
     return "\n".join(lines)
+
+def summarize_old_exchanges(
+    keep_recent: int = 15,
+    summary_trigger: int = 25,
+) -> str | None:
+    """
+    Si le nombre d'échanges dépasse summary_trigger, résume les anciens
+    et ne garde que les keep_recent plus récents en détail.
+
+    Le résumé est stocké dans data/memory_summary.txt et rechargé
+    à chaque appel au coach comme contexte permanent.
+
+    Returns:
+        Le résumé généré, ou None si pas nécessaire.
+    """
+    total = count_exchanges()
+    if total < summary_trigger:
+        return None
+
+    all_exchanges = load_recent_exchanges(limit=10000)  # tout charger
+    old_exchanges = all_exchanges[:-keep_recent]
+    recent_exchanges = all_exchanges[-keep_recent:]
+
+    if not old_exchanges:
+        return None
+
+    # Charge le résumé existant s'il y en a un
+    existing_summary = load_memory_summary()
+
+    # Construit le texte des anciens échanges à résumer
+    old_text_parts = []
+    if existing_summary:
+        old_text_parts.append(f"Résumé précédent des conversations anciennes :\n{existing_summary}\n")
+    old_text_parts.append("Nouveaux échanges à intégrer au résumé :")
+    for ex in old_exchanges:
+        ts = ex.get("timestamp", "?")[:10]
+        old_text_parts.append(f"[{ts}] Question: {ex['question'][:200]}")
+        old_text_parts.append(f"[{ts}] Réponse: {ex['answer'][:300]}")
+
+    old_text = "\n".join(old_text_parts)
+
+    # Appelle Claude pour résumer
+    from anthropic import Anthropic
+    from ai_coach.config import load_config
+    import os
+
+    config = load_config()
+    client = Anthropic(api_key=config.anthropic_api_key)
+    model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
+
+    response = client.messages.create(
+        model=model,
+        max_tokens=800,
+        system=(
+            "Tu es un assistant qui résume des conversations entre un coach cyclisme IA "
+            "et son athlète. Produis un résumé concis (max 500 mots) qui capture : "
+            "1) Les sujets abordés, 2) Les décisions prises, 3) Les problèmes identifiés, "
+            "4) Les recommandations données, 5) Le contexte émotionnel/motivationnel. "
+            "Ce résumé sera relu par le coach IA pour maintenir la continuité. "
+            "Écris en français, à la 3e personne."
+        ),
+        messages=[{"role": "user", "content": old_text}],
+    )
+
+    summary = "\n".join(
+        block.text for block in response.content if block.type == "text"
+    ).strip()
+
+    # Sauvegarde le résumé
+    SUMMARY_PATH.write_text(summary, encoding="utf-8")
+
+    # Réécrit le fichier conversations avec seulement les récents
+    if CONVERSATIONS_PATH.exists():
+        CONVERSATIONS_PATH.unlink()
+    for ex in recent_exchanges:
+        append_exchange(
+            question=ex["question"],
+            answer=ex["answer"],
+            source=ex.get("source", "cli"),
+            metadata=ex.get("metadata"),
+        )
+
+    print(f"  🧠 Mémoire compactée : {len(old_exchanges)} anciens échanges → résumé "
+          f"({len(summary)} chars), {len(recent_exchanges)} récents gardés")
+
+    return summary
+
+
+SUMMARY_PATH = DATA_DIR / "memory_summary.txt"
+
+
+def load_memory_summary() -> str:
+    """Charge le résumé de mémoire long terme s'il existe."""
+    if SUMMARY_PATH.exists():
+        return SUMMARY_PATH.read_text(encoding="utf-8").strip()
+    return ""
