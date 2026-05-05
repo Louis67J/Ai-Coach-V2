@@ -2,47 +2,55 @@
 Interface avec l'API Claude (Anthropic) pour le rôle coach cycliste.
 
 Gère le chargement du prompt système, l'injection du contexte d'analyse,
-et les appels à l'API.
+les appels à l'API, et le TOOL USE (function calling) pour donner au coach
+un accès autonome aux données d'entraînement.
 """
 from __future__ import annotations
 
 import json
 import os
+from datetime import date, timedelta
 from typing import Any
 
 from anthropic import Anthropic
 
 from ai_coach.config import load_config
-
-from ai_coach.profile import format_profile_for_llm, load_profile, ProfileNotFoundError
-
-from datetime import date, timedelta
-
-from ai_coach.memory import append_exchange, load_recent_exchanges, to_anthropic_messages
-
-from ai_coach.weather import fetch_forecast, format_weather_for_llm
-
-from ai_coach.wellness import fetch_wellness, build_wellness_summary, format_wellness_for_llm
-
+from ai_coach.memory import (
+    append_exchange,
+    load_memory_summary,
+    load_recent_exchanges,
+    summarize_old_exchanges,
+    to_anthropic_messages,
+)
+from ai_coach.profile import ProfileNotFoundError, format_profile_for_llm, load_profile
 from ai_coach.journal import format_journal_for_llm, load_recent_entries
+from ai_coach.weather import fetch_forecast, format_weather_for_llm
+from ai_coach.wellness import build_wellness_summary, fetch_wellness, format_wellness_for_llm
 
 # Modèle par défaut. Overridable via env var ANTHROPIC_MODEL.
 DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
 
 
-# --- Prompt système ---
-# Principes clés:
-# - Identité claire: coach senior cyclisme, tutoie l'athlète, français
-# - Cadre: utilise les métriques quand elles sont là, reconnaît leurs limites
-# - Format: réponses concises, structurées, actionnables
-# - Honnêteté: dit "je ne sais pas" quand il manque de données
+# ============================================================
+# SYSTEM PROMPT
+# ============================================================
 
 SYSTEM_PROMPT = """Tu es un coach cyclisme senior, personnel et dédié à un seul athlète.
 
 Tu reçois à chaque conversation :
 1. Le PROFIL complet de l'athlète (identité, objectifs, contraintes, préférences)
-2. Un RAPPORT D'ENTRAÎNEMENT avec ses métriques actuelles (CTL/ATL/TSB, charge récente)
-3. Une question ou une demande
+2. Un contexte de base (calendrier, forme actuelle, mémoire)
+3. Des OUTILS que tu peux appeler pour obtenir des données supplémentaires
+
+IMPORTANT — OUTILS DISPONIBLES :
+Tu disposes d'outils pour accéder aux données d'entraînement. UTILISE-LES quand tu as besoin
+de détails plutôt que de deviner. Par exemple :
+- Pour analyser une séance spécifique → appelle get_session_detail
+- Pour voir la météo → appelle get_weather_forecast
+- Pour les données de récupération → appelle get_wellness
+- Pour le profil de puissance → appelle get_power_profile
+- Pour chercher des séances par critère → appelle search_sessions
+Tu peux appeler PLUSIEURS outils si nécessaire. N'hésite pas à combiner les données.
 
 Ton rôle :
 - Analyser les données objectives en les croisant avec le profil
@@ -61,6 +69,13 @@ Style :
 - Quand tu cites un chiffre, explique son sens
 - Quand tu manques de données, dis-le explicitement
 - Adapte tes propositions à la date du jour et aux indisponibilités connues
+- Adapte la longueur de ta réponse à la complexité de la question.
+  * Question simple ("comment je vais ?") → réponse concise mais actionnable (verdict + reco journée)
+  * Question d'analyse ("analyse mes 5 dernières séances") → réponse structurée complète
+  * Plan d'entraînement → détaillé mais sans bavardage
+- Pas d'emojis sauf pour les indicateurs visuels de statut (✅ ⚠️ 🚨).
+- Pas de titres markdown (##) pour les réponses courtes.
+- Va droit au but. Pas de "Bien sûr !", "Excellente question !", ou reformulation de la question.
 
 Limites :
 - Tu n'es pas médecin. Pour toute douleur ou symptôme inquiétant, recommande un professionnel de santé.
@@ -74,32 +89,19 @@ Préparation Physique Générale (PPG) / Renforcement musculaire :
   * Travail unilatéral pour corriger les déséquilibres gauche/droite
   * Force maximale jambes en période de base (squats, fentes, step-ups)
   * Force-endurance en période de compétition (circuits légers, proprioception)
-- Format des séances PPG : précise les exercices, séries, répétitions, et le moment dans la journée (matin, post-entraînement, jour off)
+- Format des séances PPG : précise les exercices, séries, répétitions, et le moment
 - Intègre aussi des étirements ciblés TFL/psoas/hanche dans les jours de récup
-- Le renforcement ne remplace jamais le vélo mais le complète : place-le sur les jours légers ou en complément d'une séance courte
-- Adapte le volume PPG à la phase de la saison :
-  * Hors-saison : 3x/sem, charges lourdes, focus force max
-  * Pré-compétition : 2x/sem, charges modérées, focus explosivité et gainage
-  * Compétition : 1-2x/sem, maintien, circuits légers
-- Un des objectifs de l'athlète est de devenir plus complet (haut du corps ceinture, bras, épaule,etc..)  
+- Le renforcement ne remplace jamais le vélo mais le complète
+- Un des objectifs de l'athlète est de devenir plus complet (haut du corps, ceinture, bras, épaule)
 
 Métriques (conventions TrainingPeaks) :
 - CTL (42j) : forme long terme
 - ATL (7j) : fatigue court terme
 - TSB = CTL - ATL : fraîcheur
-  * TSB > +5 : reposé (sous-chargé si durable)
-  * TSB 0 à +5 : frais
-  * TSB -10 à 0 : charge productive
-  * TSB -20 à -10 : chargé, surveillance
-  * TSB < -20 : surcharge
-- Adapte la longueur de ta réponse à la complexité de la question.
-  * Question simple ("comment je vais ?") → 3-5 lignes max
-  * Question d'analyse ("analyse mes 5 dernières séances") → réponse structurée complète
-  * Plan d'entraînement → détaillé mais sans bavardage
-- Pas d'emojis sauf pour les indicateurs visuels de statut (✅ ⚠️ 🚨).
-- Pas de titres markdown (##) pour les réponses courtes.
-- Va droit au but. Pas de "Bien sûr !", "Excellente question !", ou reformulation de la question.
+  * TSB > +5 : reposé | 0 à +5 : frais | -10 à 0 : charge productive
+  * -20 à -10 : chargé, surveillance | < -20 : surcharge
 
+RPE (Rate of Perceived Exertion) :
 - Quand l'athlète fournit un RPE, croise-le avec les données objectives (TSS, FC, puissance).
   Un RPE élevé pour un TSS bas = possible fatigue accumulée, stress, maladie, sous-nutrition.
   Un RPE bas pour un TSS élevé = bonne forme, adaptation réussie.
@@ -107,34 +109,369 @@ Métriques (conventions TrainingPeaks) :
 """
 
 
-# --- Client Claude ---
+# ============================================================
+# TOOL DEFINITIONS
+# ============================================================
+
+TOOLS = [
+    {
+        "name": "get_session_detail",
+        "description": (
+            "Récupère la fiche enrichie d'une séance d'entraînement spécifique, "
+            "incluant : puissance (NP, IF, zones), FC, cadence, découplage, "
+            "intervalles détectés avec FC/cadence/pente par bloc, classification. "
+            "Utilise ce tool quand l'athlète demande une analyse de séance ou "
+            "quand tu as besoin de détails sur un entraînement précis."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "date": {
+                    "type": "string",
+                    "description": "Date de la séance au format YYYY-MM-DD. "
+                                   "Utilise 'last' pour la dernière séance vélo.",
+                },
+            },
+            "required": ["date"],
+        },
+    },
+    {
+        "name": "get_weather_forecast",
+        "description": (
+            "Récupère les prévisions météo des 7 prochains jours pour la zone "
+            "d'entraînement de l'athlète. Température, vent, pluie, conditions. "
+            "Utilise ce tool pour adapter les recommandations indoor/outdoor."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "get_wellness",
+        "description": (
+            "Récupère les données de récupération des 14 derniers jours : "
+            "HRV, FC repos, score de sommeil, durée de sommeil, readiness (Whoop). "
+            "Inclut les tendances et les alertes. "
+            "Utilise ce tool pour évaluer l'état de récupération."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "Nombre de jours à récupérer (défaut 14).",
+                },
+            },
+        },
+    },
+    {
+        "name": "get_power_profile",
+        "description": (
+            "Récupère le profil de puissance complet de l'athlète : meilleurs watts "
+            "sur 5s/1min/5min/20min/60min, niveaux Coggan, modèles de puissance "
+            "(CP, W', FTP estimée), VO2max estimée. Données sur 1 an."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "get_advanced_metrics",
+        "description": (
+            "Récupère les métriques avancées : monotonie/strain (7j), projections CTL, "
+            "indice de durabilité, tendance FTP. "
+            "Utilise ce tool pour une analyse approfondie de la forme."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "search_sessions",
+        "description": (
+            "Cherche des séances d'entraînement par critère. Peut filtrer par : "
+            "tag (SEUIL, VO2_PMA, FRACTIONNE_COURT, ENDURANCE, TEMPO, Z2_STRICT...), "
+            "type de sport (Ride, VirtualRide, Run...), plage de dates, TSS minimum. "
+            "Retourne une liste résumée des séances correspondantes."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tag": {
+                    "type": "string",
+                    "description": "Tag de classification (ex: SEUIL, VO2_PMA, FRACTIONNE_COURT, "
+                                   "ENDURANCE, TEMPO, Z2_STRICT, ENDURANCE_SPRINTS, MIXTE_ENDURANCE)",
+                },
+                "sport_type": {
+                    "type": "string",
+                    "description": "Type de sport (ex: Ride, VirtualRide, Run)",
+                },
+                "date_from": {
+                    "type": "string",
+                    "description": "Date de début au format YYYY-MM-DD",
+                },
+                "date_to": {
+                    "type": "string",
+                    "description": "Date de fin au format YYYY-MM-DD",
+                },
+                "min_tss": {
+                    "type": "integer",
+                    "description": "TSS minimum pour filtrer",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Nombre max de résultats (défaut 10)",
+                },
+            },
+        },
+    },
+    {
+        "name": "get_journal_rpe",
+        "description": (
+            "Récupère les entrées du journal RPE (sensations post-séance). "
+            "Chaque entrée contient : date, RPE /10, notes libres, tags automatiques."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Nombre d'entrées à récupérer (défaut 14)",
+                },
+            },
+        },
+    },
+]
+
+
+# ============================================================
+# TOOL EXECUTION
+# ============================================================
+
+def _execute_tool(name: str, input_data: dict) -> str:
+    """
+    Exécute un outil et retourne le résultat en JSON string.
+    C'est ici que chaque outil est connecté à nos fonctions Python.
+    """
+    try:
+        if name == "get_session_detail":
+            return _tool_get_session_detail(input_data)
+        elif name == "get_weather_forecast":
+            return _tool_get_weather()
+        elif name == "get_wellness":
+            return _tool_get_wellness(input_data)
+        elif name == "get_power_profile":
+            return _tool_get_power_profile()
+        elif name == "get_advanced_metrics":
+            return _tool_get_advanced_metrics()
+        elif name == "search_sessions":
+            return _tool_search_sessions(input_data)
+        elif name == "get_journal_rpe":
+            return _tool_get_journal_rpe(input_data)
+        else:
+            return json.dumps({"error": f"Outil inconnu: {name}"})
+    except Exception as e:
+        return json.dumps({"error": f"Erreur {name}: {str(e)}"})
+
+
+def _tool_get_session_detail(input_data: dict) -> str:
+    from ai_coach.intervals import load_enriched_sessions
+
+    date_str = input_data.get("date", "last")
+    sessions = load_enriched_sessions()
+
+    if date_str.lower() in ("last", "derniere", "dernière"):
+        bike = [s for s in sessions if s.get("type") in ("Ride", "VirtualRide")]
+        if not bike:
+            return json.dumps({"error": "Aucune séance vélo trouvée"})
+        target = max(bike, key=lambda s: s.get("date", ""))
+    else:
+        matching = [s for s in sessions if date_str in s.get("date", "")]
+        if not matching:
+            return json.dumps({"error": f"Aucune séance trouvée pour {date_str}"})
+        target = max(matching, key=lambda s: s.get("tss", 0))
+
+    return json.dumps(target, ensure_ascii=False, default=str)
+
+
+def _tool_get_weather() -> str:
+    try:
+        profile = load_profile()
+        lat = profile.get("context", {}).get("latitude", 45.19)
+        lon = profile.get("context", {}).get("longitude", 5.72)
+        loc = profile.get("context", {}).get("base_location", "Grenoble")
+    except ProfileNotFoundError:
+        lat, lon, loc = 45.19, 5.72, "Grenoble"
+
+    data = fetch_forecast(latitude=lat, longitude=lon, location_name=loc)
+    if not data:
+        return json.dumps({"error": "Météo indisponible"})
+    # Résumé compact au lieu du format texte complet
+    compact_days = []
+    for day in data.get("forecast", []):
+        compact_days.append({
+            "date": day.get("date"),
+            "weather": day.get("weather"),
+            "temp": f"{day.get('temp_min', '?')}-{day.get('temp_max', '?')}°C",
+            "wind_kmh": day.get("wind_max_kmh"),
+            "rain_mm": day.get("precipitation_mm"),
+            "rain_prob": day.get("precipitation_prob"),
+        })
+    return json.dumps({"location": loc, "forecast": compact_days}, ensure_ascii=False)
+
+def _tool_get_wellness(input_data: dict) -> str:
+    days = min(input_data.get("days", 7), 7)  # Max 7 jours pour limiter les tokens
+    data = fetch_wellness(days=days)
+    summary = build_wellness_summary(data)
+    if not summary:
+        return json.dumps({"error": "Pas de données wellness disponibles"})
+    # Résumé compact au lieu du format complet
+    compact = {
+        "hrv_avg": summary.get("hrv_avg_7d"),
+        "hrv_latest": summary.get("hrv_latest"),
+        "hrv_trend": summary.get("hrv_trend"),
+        "rhr_avg": summary.get("rhr_avg_7d"),
+        "rhr_latest": summary.get("rhr_latest"),
+        "sleep_score_avg": summary.get("sleep_score_avg"),
+        "sleep_hours_avg": summary.get("sleep_hours_avg"),
+        "readiness_latest": summary.get("readiness_latest"),
+        "alerts": summary.get("alerts", []),
+    }
+    return json.dumps(compact, ensure_ascii=False)
+
+def _tool_get_power_profile() -> str:
+    from ai_coach.intervals import load_enriched_sessions, fetch_power_curves
+
+    curve = fetch_power_curves()
+    if curve:
+        # Résumé compact pour le LLM
+        result = {
+            "source": "intervals_api",
+            "weight": curve.get("weight"),
+            "period": f"{(curve.get('start_date_local') or '?')[:10]} → {(curve.get('end_date_local') or '?')[:10]}",
+        }
+
+        secs = curve.get("secs", [])
+        values = curve.get("values", [])
+        wkg = curve.get("watts_per_kg", [])
+
+        targets = {"5s": 5, "1min": 60, "5min": 300, "20min": 1200, "60min": 3600}
+        bests = {}
+        for label, target_s in targets.items():
+            closest = min(range(len(secs)), key=lambda i: abs(secs[i] - target_s))
+            bests[label] = {
+                "watts": values[closest],
+                "w_kg": round(wkg[closest], 2) if closest < len(wkg) else None,
+            }
+        result["bests"] = bests
+
+        models = {}
+        for pm in curve.get("powerModels", []):
+            models[pm.get("type", "?")] = {
+                "cp": pm.get("criticalPower"),
+                "ftp": pm.get("ftp"),
+                "w_prime": pm.get("wPrime"),
+            }
+        result["power_models"] = models
+        result["vo2max_5min"] = curve.get("vo2max_5m")
+
+        return json.dumps(result, ensure_ascii=False)
+
+    return json.dumps({"error": "Power curve indisponible"})
+
+
+def _tool_get_advanced_metrics() -> str:
+    from ai_coach.intervals import load_cached_activities
+    from ai_coach.analysis import build_report
+
+    activities = load_cached_activities()
+    if not activities:
+        return json.dumps({"error": "Pas de données en cache"})
+
+    report = build_report(activities)
+
+    metrics = {}
+    for key in ("monotony_strain", "ctl_forecast", "durability", "ftp_trend"):
+        if key in report:
+            metrics[key] = report[key]
+
+    return json.dumps(metrics, ensure_ascii=False, default=str)
+
+
+def _tool_search_sessions(input_data: dict) -> str:
+    from ai_coach.intervals import load_enriched_sessions
+
+    sessions = load_enriched_sessions()
+
+    tag = input_data.get("tag")
+    sport_type = input_data.get("sport_type")
+    date_from = input_data.get("date_from")
+    date_to = input_data.get("date_to")
+    min_tss = input_data.get("min_tss")
+    limit = input_data.get("limit", 10)
+
+    filtered = sessions
+    if tag:
+        filtered = [s for s in filtered if tag.upper() in (s.get("tag") or "").upper()]
+    if sport_type:
+        filtered = [s for s in filtered if sport_type.lower() in (s.get("type") or "").lower()]
+    if date_from:
+        filtered = [s for s in filtered if (s.get("date") or "") >= date_from]
+    if date_to:
+        filtered = [s for s in filtered if (s.get("date") or "") <= date_to]
+    if min_tss:
+        filtered = [s for s in filtered if (s.get("tss") or 0) >= min_tss]
+
+    # Trie par date décroissante
+    filtered.sort(key=lambda s: s.get("date", ""), reverse=True)
+    filtered = filtered[:limit]
+
+    # Résumé compact
+    results = []
+    for s in filtered:
+        results.append({
+            "date": s.get("date"),
+            "name": s.get("name"),
+            "tag": s.get("tag"),
+            "tss": s.get("tss"),
+            "np_watts": s.get("np_watts"),
+            "intensity_factor": s.get("intensity_factor"),
+            "avg_hr": s.get("avg_hr"),
+            "decoupling_pct": s.get("decoupling_pct"),
+            "intervals_count": len(s.get("detailed_groups") or []),
+        })
+
+    return json.dumps({"count": len(results), "sessions": results}, ensure_ascii=False)
+
+
+def _tool_get_journal_rpe(input_data: dict) -> str:
+    limit = input_data.get("limit", 14)
+    entries = load_recent_entries(limit=limit)
+    if not entries:
+        return json.dumps({"message": "Journal RPE vide"})
+    return format_journal_for_llm(entries)
+
+
+# ============================================================
+# HELPERS
+# ============================================================
 
 def _client() -> Anthropic:
-    """Crée un client Anthropic avec la clé depuis la config."""
     config = load_config()
     return Anthropic(api_key=config.anthropic_api_key)
 
 
 def _build_calendar_window(profile: dict[str, Any], days_ahead: int = 14) -> str:
-    """
-    Construit une table claire des prochains jours avec annotation des
-    indispos et créneaux types. Évite à Claude de calculer les jours
-    de semaine lui-même (source d'erreurs fréquentes des LLM).
-    """
     weekdays_fr = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
-
-    # Récupère les indispos du profil
-    unavailable = set(
-        profile.get("context", {}).get("unavailable_dates", [])
-    )
-
-    # Récupère les créneaux types par jour de semaine
+    unavailable = set(profile.get("context", {}).get("unavailable_dates", []))
     schedule = profile.get("context", {}).get("typical_schedule", {})
 
     today = date.today()
     lines = ["=== AGENDA DES 14 PROCHAINS JOURS ==="]
-    lines.append("(table de référence : ne calcule PAS les jours de semaine toi-même, "
-                 "lis-les dans cette table)")
+    lines.append("(table de référence : ne calcule PAS les jours de semaine toi-même)")
     lines.append("")
 
     for offset in range(days_ahead):
@@ -146,7 +483,7 @@ def _build_calendar_window(profile: dict[str, Any], days_ahead: int = 14) -> str
         if offset == 0:
             markers.append("AUJOURD'HUI")
         if day_str in unavailable:
-            markers.append("INDISPONIBLE (vélo impossible)")
+            markers.append("INDISPONIBLE")
         if weekday == "lundi" and "monday" in schedule:
             markers.append(f"({schedule['monday']})")
 
@@ -155,216 +492,10 @@ def _build_calendar_window(profile: dict[str, Any], days_ahead: int = 14) -> str
 
     return "\n".join(lines)
 
-def _format_report_for_llm(report: dict[str, Any]) -> str:
-    """
-    Transforme le rapport d'analyse en texte lisible pour Claude.
-    """
-    lines = []
 
-    lines.append(f"=== RAPPORT D'ENTRAÎNEMENT ===\n")
-
-    period = report.get("period", {})
-    stub_pct = period.get("stub_pct", 0)
-    lines.append(
-        f"Période analysée: {period.get('activities_usable', 0)} activités exploitables "
-        f"sur {period.get('activities_total', 0)} au total."
-    )
-    if stub_pct > 0:
-        lines.append("")
-        lines.append(
-            f"⚠️ IMPORTANT — {stub_pct:.0f}% des activités sont des 'stubs Strava' : "
-            f"l'athlète les a BIEN EFFECTUÉES, mais leurs détails ne sont pas accessibles "
-            f"via cette API (limitation Strava côté API Intervals.icu). "
-            f"Ces activités ne reflètent PAS un manque de consistance — l'athlète s'entraîne "
-            f"davantage que les chiffres ci-dessous ne le montrent. "
-            f"Les CTL/ATL/TSB sont mécaniquement sous-estimés. "
-            f"N'interprète JAMAIS la part 'stubs' comme un signal d'inconsistance "
-            f"ou de manque de motivation."
-        )
-
-    totals = report.get("totals_usable", {})
-    if totals:
-        lines.append(
-            f"Totaux exploitables : {totals.get('total_hours', 0)}h, "
-            f"{totals.get('total_km', 0)}km, {totals.get('count', 0)} séances"
-        )
-
-    cf = report.get("current_fitness", {})
-    if cf:
-        lines.append(f"\nForme actuelle (au {cf.get('as_of', '?')}):")
-        lines.append(f"  CTL = {cf.get('ctl', '?')} (forme)")
-        lines.append(f"  ATL = {cf.get('atl', '?')} (fatigue)")
-        lines.append(f"  TSB = {cf.get('tsb', '?')} (fraîcheur)")
-
-    weekly = report.get("recent_weekly_load", [])
-    if weekly:
-        lines.append("\nCharge hebdomadaire récente "
-                     "(une semaine = lundi → dimanche, étiquetée par sa date de fin) :")
-        for w in weekly:
-            status = w.get("status", "")
-            status_str = f" [{status}]" if status else ""
-            lines.append(
-                f"  Semaine se terminant le {w.get('week_ending', '?')}: "
-                f"{w.get('tss', 0):.0f} TSS{status_str}"
-            )
-
-    daily = report.get("recent_daily_log", [])
-    if daily:
-        lines.append("\nDétail des 14 derniers jours (jour par jour) :")
-        for day in daily:
-            sessions = day.get("sessions", [])
-            if not sessions:
-                lines.append(f"  {day['weekday']:9s} {day['date']} : (repos)")
-            else:
-                # Une ligne par séance du jour
-                first = True
-                for s in sessions:
-                    prefix = f"  {day['weekday']:9s} {day['date']}" if first else " " * 22
-                    lines.append(
-                        f"{prefix} : {s['type']:12s} "
-                        f"{s['duration_h']:>4.1f}h  {s['distance_km']:>5.1f}km  "
-                        f"TSS={s['tss']:>3d}  {s['name'][:40]}"
-                    )
-                    first = False
-
-    sessions = report.get("recent_sessions", [])
-    if sessions:
-        lines.append("\nDétail des séances récentes (les plus récentes en premier) :")
-        for s in sessions:
-            tag = s.get("tag", "?")
-            name = (s.get("name") or "?")[:40]
-            np_w = s.get("np_watts") or "?"
-            if_val = s.get("intensity_factor") or "?"
-            tss = s.get("tss", 0)
-            duration_h = round((s.get("moving_time_s") or 0) / 3600, 1)
-            dist = s.get("distance_km", 0)
-            elev = s.get("elevation_gain", 0)
-            zones = s.get("zones", "")
-            hr = s.get("avg_hr") or "?"
-            dec = s.get("decoupling_pct")
-
-            lines.append(
-                f"\n  📅 {s.get('date', '?')} — {name}"
-            )
-            lines.append(
-                f"     [{tag}] {duration_h}h | {dist}km | {elev}m D+ | "
-                f"NP={np_w}W | IF={if_val} | TSS={tss} | FC moy={hr}"
-            )
-            if zones:
-                lines.append(f"     Zones: {zones}")
-            if dec is not None:
-                lines.append(f"     Découplage cardiaque: {dec:.1f}%")
-
-                # Groupes d'intervalles détaillés (avec FC, cadence, pente, etc.)
-                groups = s.get("detailed_groups", [])
-                if groups:
-                    lines.append(f"     Intervalles ({len(groups)} blocs) :")
-                    for g in groups:
-                        lines.append(f"       • {g.get('label', '?')}")
-                else:
-                    # Fallback sur le pattern détecté ou les intervalles bruts
-                    pattern = s.get("interval_pattern")
-                    if pattern:
-                        lines.append(f"     🎯 Structure détectée : {pattern}")
-                    intervals = s.get("intervals", [])
-                    if intervals and not pattern:
-                        lines.append(f"     Intervalles bruts ({len(intervals)}) :")
-                        for iv in intervals[:6]:
-                            lines.append(f"       • {iv}")
-                        if len(intervals) > 6:
-                            lines.append(f"       ... +{len(intervals) - 6} autres")
-
-        # --- Métriques avancées ---
-        mono = report.get("monotony_strain", {})
-        if mono:
-            lines.append("\n=== MÉTRIQUES AVANCÉES ===")
-            lines.append(f"\n📊 Monotonie & Strain (7 derniers jours) :")
-            lines.append(f"  Monotonie = {mono.get('monotony', '?')} ({mono.get('monotony_status', '?')})")
-            lines.append(f"  Strain = {mono.get('strain', '?')} ({mono.get('strain_status', '?')})")
-            lines.append(
-                f"  TSS quotidien moyen = {mono.get('daily_mean_tss', '?')} ± {mono.get('daily_std_tss', '?')}")
-
-        forecast = report.get("ctl_forecast", [])
-        if forecast:
-            lines.append(f"\n📈 Projection CTL (si charge actuelle maintenue) :")
-            for f in forecast:
-                lines.append(
-                    f"  J+{f['horizon_days']} ({f['target_date']}) : "
-                    f"CTL projeté = {f['projected_ctl']} "
-                    f"({'↗️ +' if f['delta_vs_now'] > 0 else '↘️ '}{f['delta_vs_now']})"
-                )
-            lines.append(f"  Hypothèse : {forecast[0].get('assumption_daily_tss', '?')} TSS/jour en moyenne")
-
-        durability = report.get("durability", {})
-        if durability and durability.get("status") != "insufficient_data":
-            lines.append(f"\n🏋️ Durabilité (sorties >2h) :")
-            lines.append(f"  Note : {durability.get('durability_rating', '?')}")
-            lines.append(f"  Découplage moyen : {durability.get('avg_decoupling_pct', '?')}%")
-            if "trend" in durability:
-                lines.append(f"  Tendance : {durability['trend']}")
-            lines.append(f"  Basé sur {durability.get('count', '?')} sorties longues")
-
-        ftp_trend = report.get("ftp_trend", {})
-        if ftp_trend and ftp_trend.get("status") != "insufficient_data":
-            lines.append(f"\n📉 Tendance FTP :")
-            if "trend" in ftp_trend:
-                lines.append(f"  Tendance : {ftp_trend['trend']}")
-            if "recent_avg_top5" in ftp_trend:
-                lines.append(f"  Top 5 estimations récentes (3 mois) : ~{ftp_trend['recent_avg_top5']}W")
-            if "older_avg_top5" in ftp_trend:
-                lines.append(f"  Top 5 estimations anciennes : ~{ftp_trend['older_avg_top5']}W")
-            if "delta" in ftp_trend:
-                lines.append(f"  Delta : {'+' if ftp_trend['delta'] > 0 else ''}{ftp_trend['delta']}W")
-            if ftp_trend.get("recent_best"):
-                lines.append(f"  Meilleures estimations récentes :")
-                for perf in ftp_trend["recent_best"][:3]:
-                    lines.append(f"    • {perf['date']} : ~{perf['ftp']}W ({perf['source']}, {perf['name']})")
-
-        power = report.get("power_profile", {})
-        if power and power.get("profile"):
-            lines.append(f"\n⚡ Profil de puissance ({power.get('weight_kg_used', '?')}kg, "
-                         f"source: {power.get('source', '?')}, "
-                         f"période: {power.get('period', '?')})")
-            for duration, data in power["profile"].items():
-                lines.append(
-                    f"  {duration:>5s} : {data['watts']:>4d}W = {data['w_kg']:.1f} W/kg ({data['level']})"
-                )
-            if power.get("strengths"):
-                lines.append(f"  💪 Forces : {', '.join(power['strengths'])}")
-            if power.get("weaknesses"):
-                lines.append(f"  ⚠️ Faiblesses : {', '.join(power['weaknesses'])}")
-
-            models = power.get("power_models", {})
-            if models:
-                lines.append(f"\n  Modèles de puissance (calculés par Intervals.icu) :")
-                for model_name, m in models.items():
-                    parts = []
-                    if m.get("cp"):
-                        parts.append(f"CP={m['cp']}W")
-                    if m.get("ftp"):
-                        parts.append(f"FTP={m['ftp']}W")
-                    if m.get("w_prime"):
-                        parts.append(f"W'={round(m['w_prime'] / 1000, 1)}kJ")
-                    if m.get("p_max"):
-                        parts.append(f"Pmax={m['p_max']}W")
-                    lines.append(f"    {model_name}: {', '.join(parts)}")
-
-            if power.get("vo2max_estimated"):
-                lines.append(f"  VO2max estimée (5min power) : {power['vo2max_estimated']:.1f} ml/kg/min")
-
-    breakdown = report.get("sport_breakdown", {})
-    if breakdown:
-        lines.append("\nRépartition par sport (période analysée) :")
-        for sport, data in breakdown.items():
-            lines.append(
-                f"  {sport}: {data.get('count', 0)} séances, "
-                f"{data.get('hours', 0)}h, {data.get('tss', 0):.0f} TSS"
-            )
-
-    return "\n".join(lines)
-
-
-# --- Interfaces publiques ---
+# ============================================================
+# MAIN ASK FUNCTION WITH TOOL USE
+# ============================================================
 
 def ask_coach(
     question: str,
@@ -375,125 +506,112 @@ def ask_coach(
     history_limit: int = 20,
     persist: bool = True,
     light: bool = False,
+    max_tool_rounds: int = 5,
 ) -> str:
     """
-    Pose une question au coach avec profil + calendrier + rapport + historique conversationnel.
+    Pose une question au coach avec tool use.
 
-    Args:
-        question: la question
-        report: dict d'analyse
-        max_tokens: longueur max de la réponse
-        source: "cli" ou "discord" (pour traçage)
-        metadata: contexte additionnel à logger (user, channel...)
-        history_limit: nombre d'échanges précédents à charger en contexte
-        persist: si True, sauvegarde l'échange dans la mémoire après réponse
+    Le coach reçoit un contexte de base léger (profil + calendrier + fitness)
+    et des OUTILS qu'il peut appeler pour obtenir plus de données.
+    Il décide lui-même quand il a besoin de détails.
     """
-    # Profil athlète
+    # --- Contexte de base (toujours injecté, léger) ---
     try:
         profile = load_profile()
         profile_text = format_profile_for_llm(profile)
     except ProfileNotFoundError:
         profile = {}
-        profile_text = "(Aucun profil athlète défini — réponses génériques)"
+        profile_text = "(Aucun profil athlète défini)"
 
-    # Calendrier explicite
     calendar_text = _build_calendar_window(profile, days_ahead=14)
 
-    # Météo J+7
-    weather_data = fetch_forecast(
-        latitude=profile.get("context", {}).get("latitude", 45.19),
-        longitude=profile.get("context", {}).get("longitude", 5.72),
-        location_name=profile.get("context", {}).get("base_location", "Grenoble"),
-    )
-    weather_text = format_weather_for_llm(weather_data) if weather_data else ""
+    # Fitness actuelle (toujours utile, très léger)
+    cf = report.get("current_fitness", {})
+    fitness_text = ""
+    if cf:
+        fitness_text = (
+            f"\nForme actuelle (au {cf.get('as_of', '?')}) : "
+            f"CTL={cf.get('ctl')} ATL={cf.get('atl')} TSB={cf.get('tsb')}"
+        )
 
-    # Wellness / récupération
-    wellness_data = fetch_wellness(days=14)
-    wellness_summary = build_wellness_summary(wellness_data)
-    wellness_text = format_wellness_for_llm(wellness_summary) if wellness_summary else ""
+    # Mémoire long terme
+    summarize_old_exchanges(keep_recent=15, summary_trigger=25)
+    memory_summary = load_memory_summary()
+    memory_text = ""
+    if memory_summary:
+        memory_text = (
+            f"\n=== MÉMOIRE LONG TERME ===\n{memory_summary}\n"
+        )
 
-    # Journal RPE
-    journal_entries = load_recent_entries(limit=14)
-    journal_text = format_journal_for_llm(journal_entries) if journal_entries else ""
-
-    # Rapport d'analyse
-    report_text = _format_report_for_llm(report)
-
-    # Historique conversationnel précédent
+    # Historique conversationnel
     history = load_recent_exchanges(limit=history_limit)
     history_messages = to_anthropic_messages(history)
 
-    # Résumé de mémoire long terme (conversations anciennes compactées)
-    from ai_coach.memory import load_memory_summary, summarize_old_exchanges
-    # Auto-compacte si nécessaire
-    summarize_old_exchanges(keep_recent=15, summary_trigger=25)
-    memory_summary = load_memory_summary()
-    memory_summary_text = ""
-    if memory_summary:
-        memory_summary_text = (
-            f"\n=== MÉMOIRE LONG TERME (résumé de nos conversations passées) ===\n"
-            f"{memory_summary}\n"
-        )
-
-    # Mode léger : questions courtes = contexte réduit
-    # On détecte automatiquement si la question est simple
-    is_simple = len(question.split()) < 15 and not any(
-        kw in question.lower()
-        for kw in ("analyse", "plan", "séance", "semaine", "détail", "compare",
-                   "historique", "progression", "intervalle", "session")
+    # --- Construction du message utilisateur ---
+    current_user_message = (
+        f"{profile_text}\n\n"
+        f"{calendar_text}\n\n"
+        f"{fitness_text}\n\n"
+        f"{memory_text}\n\n"
+        f"=== Ma question ===\n{question}"
     )
 
-    if light or is_simple:
-        # Contexte minimal : juste profil résumé + fitness actuelle + wellness
-        report_text_short = ""
-        cf = report.get("current_fitness", {})
-        if cf:
-            report_text_short = (
-                f"Forme actuelle : CTL={cf.get('ctl')} ATL={cf.get('atl')} TSB={cf.get('tsb')}"
-            )
-        current_user_message = (
-            f"{profile_text}\n\n"
-            f"{calendar_text}\n\n"
-            f"{wellness_text}\n\n"
-            f"{journal_text}\n\n"
-            f"{memory_summary_text}\n\n"
-            f"{report_text_short}\n\n"
-            f"=== Ma question ===\n{question}\n\n"
-            f"INSTRUCTION : question simple → réponds en 3 à 5 lignes maximum. "
-            f"Pas de tableau, pas de titres markdown, pas d'analyse détaillée. "
-            f"Juste l'essentiel en quelques phrases."
-        )
-        max_tokens = min(max_tokens, 500)
-    else:
-        current_user_message = (
-            f"{profile_text}\n\n"
-            f"{calendar_text}\n\n"
-            f"{weather_text}\n\n"
-            f"{wellness_text}\n\n"
-            f"{journal_text}\n\n"
-            f"{memory_summary_text}\n\n"
-            f"{report_text}\n\n"
-            f"=== Ma question ===\n{question}"
-        )
-
-    # Liste finale de messages : historique passé + question actuelle
     messages = history_messages + [
         {"role": "user", "content": current_user_message}
     ]
 
+    # --- Boucle d'appel avec tool use ---
     client = _client()
-    response = client.messages.create(
-        model=DEFAULT_MODEL,
-        max_tokens=max_tokens,
-        system=SYSTEM_PROMPT,
-        messages=messages,
-    )
+    tools_to_use = TOOLS if not light else []  # Pas d'outils en mode léger
 
+    for round_num in range(max_tool_rounds + 1):
+        import time
+        for attempt in range(3):
+            try:
+                response = client.messages.create(
+                    model=DEFAULT_MODEL,
+                    max_tokens=max_tokens,
+                    system=SYSTEM_PROMPT,
+                    messages=messages,
+                    tools=tools_to_use if tools_to_use else [],
+                )
+                break
+            except Exception as e:
+                if "rate_limit" in str(e).lower() and attempt < 2:
+                    wait = 30 * (attempt + 1)
+                    print(f"  ⏳ Rate limit, attente {wait}s...")
+                    time.sleep(wait)
+                else:
+                    raise
+
+        # Si Claude ne demande pas d'outil, on a la réponse finale
+        if response.stop_reason != "tool_use":
+            break
+
+        # Claude veut utiliser un ou plusieurs outils
+        # Ajoute la réponse de Claude (avec les tool_use blocks) aux messages
+        messages.append({"role": "assistant", "content": response.content})
+
+        # Exécute chaque outil demandé
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                print(f"  🔧 Outil appelé : {block.name}({json.dumps(block.input, ensure_ascii=False)})")
+                result = _execute_tool(block.name, block.input)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result,
+                })
+
+        # Renvoie les résultats à Claude
+        messages.append({"role": "user", "content": tool_results})
+
+    # --- Extraction de la réponse finale ---
     parts = [block.text for block in response.content if block.type == "text"]
     answer = "\n".join(parts).strip()
 
-    # Sauvegarde l'échange. On ne stocke QUE la question brute (pas tout le
-    # contexte injecté), parce que celui-ci est régénéré frais à chaque appel.
+    # Sauvegarde en mémoire
     if persist:
         append_exchange(
             question=question,
@@ -504,27 +622,29 @@ def ask_coach(
 
     return answer
 
+
 def generate_plan(
     report: dict[str, Any],
     horizon_days: int = 10,
     source: str = "cli",
     metadata: dict[str, Any] | None = None,
 ) -> str:
-    """
-    Demande au coach un plan d'entraînement structuré pour les N prochains jours.
-    """
     question = (
         f"Propose-moi un plan d'entraînement pour les {horizon_days} prochains jours, "
         f"basé sur mon état de forme actuel et nos discussions précédentes si pertinent. "
+        f"Utilise les outils disponibles pour consulter ma wellness, la météo, "
+        f"et mes séances récentes si tu en as besoin. "
         f"Pour chaque jour: type de séance, durée, intensité cible, et une phrase sur l'objectif. "
+        f"Inclus 2-3 séances de renforcement musculaire. "
         f"Termine par 2-3 phrases sur la logique globale du bloc."
     )
     return ask_coach(
         question, report,
-        max_tokens=2000,
+        max_tokens=3000,
         source=source,
         metadata=metadata,
     )
+
 
 async def ask_coach_async(
     question: str,
@@ -536,15 +656,9 @@ async def ask_coach_async(
     persist: bool = True,
     light: bool = False,
 ) -> str:
-    """
-    Version async de ask_coach, pour le bot Discord.
-    Exécute l'appel bloquant dans un thread séparé pour ne pas bloquer
-    la boucle événementielle de Discord.
-    """
     import asyncio
     import functools
 
-    # Wrap l'appel synchrone dans un executor
     loop = asyncio.get_event_loop()
     answer = await loop.run_in_executor(
         None,
@@ -569,7 +683,6 @@ async def generate_plan_async(
     source: str = "discord",
     metadata: dict[str, Any] | None = None,
 ) -> str:
-    """Version async de generate_plan."""
     import asyncio
     import functools
 
