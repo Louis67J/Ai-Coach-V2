@@ -15,14 +15,51 @@ import logging
 from pathlib import Path
 
 import discord
-from discord.ext import commands
+
 
 from ai_coach.analysis import build_report
 from ai_coach.coach import ask_coach, generate_plan, ask_coach_async, generate_plan_async
 from ai_coach.config import OUTPUTS_DIR, load_config
 from ai_coach.intervals import load_cached_activities, refresh_cache
+from discord.ext import commands, tasks
 
+# Mapping des commandes vers des channels dédiés (optionnel).
+# Si un channel n'existe pas, la réponse va dans le channel d'origine.
+# Format: nom_commande -> nom_du_channel_discord
+CHANNEL_ROUTING = {
+    "plan": "plans",
+    "fitness": "graphes",
+    "fitness_html": "graphes",
+    "session": "graphes",
+    "session_html": "graphes",
+    "power_curve": "graphes",
+    "gpx": "parcours",
+    "metrics": "analyse",
+}
 
+async def _get_routed_channel(ctx: commands.Context, command_name: str):
+    """
+    Retourne le channel cible pour une commande, ou le channel d'origine
+    si pas de routing configuré ou si le channel cible n'existe pas.
+    """
+    target_name = CHANNEL_ROUTING.get(command_name)
+    if not target_name:
+        return ctx.channel
+
+    # Cherche le channel par nom dans le serveur
+    guild = ctx.guild
+    if not guild:
+        return ctx.channel
+
+    for channel in guild.text_channels:
+        if channel.name == target_name:
+            # Vérifie que le bot a la permission d'écrire
+            perms = channel.permissions_for(guild.me)
+            if perms.send_messages:
+                return channel
+            break
+
+    return ctx.channel
 # --- Logging ---
 logging.basicConfig(
     level=logging.INFO,
@@ -96,6 +133,41 @@ def _load_report_or_error() -> dict | str:
 async def on_ready() -> None:
     log.info(f"Connecté en tant que {bot.user}")
     log.info(f"Serveurs: {[g.name for g in bot.guilds]}")
+    # Démarre l'auto-refresh si pas déjà actif
+    if not auto_refresh.is_running():
+        auto_refresh.start()
+        log.info("🔄 Auto-refresh planifié (toutes les 4h)")
+
+
+@bot.command(name="followup")
+async def cmd_followup(ctx: commands.Context) -> None:
+    """Compare le dernier plan prescrit avec les séances réalisées."""
+    result = _load_report_or_error()
+    if isinstance(result, str):
+        await ctx.send(result)
+        return
+
+    metadata = {
+        "discord_user": str(ctx.author),
+        "discord_channel": str(ctx.channel),
+    }
+
+    async with ctx.typing():
+        try:
+            answer = await ask_coach_async(
+                "Compare mon dernier plan d'entraînement avec ce que j'ai réellement fait. "
+                "Utilise l'outil get_plan_followup pour voir le plan et les séances. "
+                "Dis-moi ce que j'ai suivi, ce que j'ai manqué, et si les écarts sont importants.",
+                result,
+                source="discord",
+                metadata=metadata,
+            )
+        except Exception as e:
+            log.exception("followup failed")
+            await ctx.send(f"❌ Erreur : {e}")
+            return
+
+    await send_long(ctx, answer)
 
 
 @bot.event
@@ -133,9 +205,32 @@ async def help_coach(ctx: commands.Context) -> None:
         "`!session_html <date|last>` — graphe séance interactif (HTML)\n"
         "`!rpe <1-10> [notes]` — enregistre ton RPE post-séance\n"
         "`!journal [n]` — affiche les dernières entrées RPE\n"
+        "`!cost` — consommation tokens et coût estimé\n"
+        "`!followup` — compare le plan prescrit vs réalisé\n"
         "`!help_coach` — cette aide\n"
     )
     await ctx.send(text)
+
+@bot.command(name="cost")
+async def cmd_cost(ctx: commands.Context) -> None:
+    """Affiche la consommation de tokens et le coût estimé."""
+    from ai_coach.token_tracker import get_usage_summary
+    summary = get_usage_summary()
+
+    lines = ["**💰 Consommation API Claude**\n"]
+
+    for period_name, period_key in [("Aujourd'hui", "today"), ("Cette semaine", "this_week"),
+                                      ("Ce mois", "this_month"), ("Total", "all_time")]:
+        p = summary.get(period_key, {})
+        if p.get("calls", 0) > 0:
+            lines.append(
+                f"**{period_name}** : {p['calls']} appels | "
+                f"{p['input_tokens']:,} in + {p['output_tokens']:,} out | "
+                f"~${p['cost_usd']:.4f}"
+            )
+
+    lines.append(f"\n🔗 [Vérifier le solde réel]({summary.get('billing_url', '')})")
+    await ctx.send("\n".join(lines))
 
 @bot.command(name="gpx")
 async def cmd_gpx(ctx: commands.Context, target_date: str = "", *, question: str = "") -> None:
@@ -460,7 +555,10 @@ async def cmd_plan(ctx: commands.Context, days: int = 7) -> None:
             await ctx.send(f"❌ Erreur : {e}")
             return
 
-    await send_long(ctx, plan_text)
+    target_channel = await _get_routed_channel(ctx, "plan")
+    if target_channel != ctx.channel:
+        await ctx.send(f"📋 Plan envoyé dans #{target_channel.name}")
+    await send_long(target_channel, plan_text)
 
 @bot.command(name="power_curve")
 async def cmd_power_curve(ctx: commands.Context) -> None:
@@ -537,7 +635,10 @@ async def cmd_fitness(ctx: commands.Context) -> None:
     if not path or not Path(path).exists():
         await ctx.send("❌ Impossible de générer le graphe.")
         return
-    await ctx.send(file=discord.File(str(path)))
+    target_channel = await _get_routed_channel(ctx, "fitness")
+    if target_channel != ctx.channel:
+        await ctx.send(f"📊 Graphe envoyé dans #{target_channel.name}")
+    await target_channel.send(file=discord.File(str(path)))
 
 @bot.command(name="fitness_html")
 async def cmd_fitness_html(ctx: commands.Context) -> None:
@@ -734,7 +835,37 @@ async def cmd_add_note(ctx: commands.Context, *, note: str) -> None:
     save_profile(profile)
     await ctx.send(f"✅ Note ajoutée ({len(profile['running_notes'])} notes en mémoire).")
 
+@tasks.loop(hours=4)
+async def auto_refresh():
+    """Rafraîchit automatiquement les données toutes les 4h."""
+    import asyncio
+    import functools
 
+    log.info("🔄 Auto-refresh déclenché...")
+    try:
+        # Refresh des activités
+        activities = await asyncio.get_event_loop().run_in_executor(
+            None,
+            functools.partial(refresh_cache, days=730),
+        )
+        log.info(f"  ✅ {len(activities)} activités en cache")
+
+        # Enrichissement des nouvelles séances (max 10 par cycle)
+        from ai_coach.intervals import enrich_sessions
+        sessions = await asyncio.get_event_loop().run_in_executor(
+            None,
+            functools.partial(enrich_sessions, activities, max_new=10),
+        )
+        log.info(f"  ✅ {len(sessions)} séances enrichies")
+
+    except Exception:
+        log.exception("Auto-refresh failed")
+
+
+@auto_refresh.before_loop
+async def before_auto_refresh():
+    """Attend que le bot soit prêt avant de commencer l'auto-refresh."""
+    await bot.wait_until_ready()
 # --- Entry point ---
 
 def run_bot() -> None:

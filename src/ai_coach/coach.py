@@ -27,6 +27,8 @@ from ai_coach.journal import format_journal_for_llm, load_recent_entries
 from ai_coach.weather import fetch_forecast, format_weather_for_llm
 from ai_coach.wellness import build_wellness_summary, fetch_wellness, format_wellness_for_llm
 
+from ai_coach.token_tracker import log_usage
+
 # Modèle par défaut. Overridable via env var ANTHROPIC_MODEL.
 DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
 
@@ -244,6 +246,23 @@ TOOLS = [
             },
         },
     },
+    {
+        "name": "get_plan_followup",
+        "description": (
+            "Récupère les derniers plans d'entraînement prescrits et compare "
+            "avec les séances réellement effectuées. Permet de voir si l'athlète "
+            "suit le plan ou s'en écarte."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Nombre de plans à récupérer (défaut 1, le dernier)",
+                },
+            },
+        },
+    },
 ]
 
 
@@ -271,10 +290,30 @@ def _execute_tool(name: str, input_data: dict) -> str:
             return _tool_search_sessions(input_data)
         elif name == "get_journal_rpe":
             return _tool_get_journal_rpe(input_data)
+        elif name == "get_plan_followup":
+            return _tool_get_plan_followup(input_data)
         else:
             return json.dumps({"error": f"Outil inconnu: {name}"})
     except Exception as e:
         return json.dumps({"error": f"Erreur {name}: {str(e)}"})
+
+
+def _tool_get_plan_followup(input_data: dict) -> str:
+    from ai_coach.plan_tracker import load_recent_plans, build_plan_vs_actual
+    from ai_coach.intervals import load_enriched_sessions
+
+    limit = input_data.get("limit", 1)
+    plans = load_recent_plans(limit=limit)
+    if not plans:
+        return json.dumps({"message": "Aucun plan enregistré"})
+
+    sessions = load_enriched_sessions()
+    results = []
+    for plan in plans:
+        comparison = build_plan_vs_actual(plan, sessions)
+        results.append(comparison)
+
+    return "\n\n".join(results)
 
 
 def _tool_get_session_detail(input_data: dict) -> str:
@@ -584,9 +623,22 @@ def ask_coach(
                 else:
                     raise
 
+        # --- Log de la consommation tokens ---
+        if hasattr(response, "usage"):
+            log_usage(
+                model=DEFAULT_MODEL,
+                input_tokens=response.usage.input_tokens,
+                output_tokens=response.usage.output_tokens,
+                source=source,
+                question_preview=question,
+            )
         # Si Claude ne demande pas d'outil, on a la réponse finale
         if response.stop_reason != "tool_use":
             break
+
+        # --- Extraction de la réponse finale ---
+        parts = [block.text for block in response.content if block.type == "text"]
+        answer = "\n".join(parts).strip()
 
         # Claude veut utiliser un ou plusieurs outils
         # Ajoute la réponse de Claude (avec les tool_use blocks) aux messages
@@ -638,12 +690,22 @@ def generate_plan(
         f"Inclus 2-3 séances de renforcement musculaire. "
         f"Termine par 2-3 phrases sur la logique globale du bloc."
     )
-    return ask_coach(
+    plan_text = ask_coach(
         question, report,
         max_tokens=3000,
         source=source,
         metadata=metadata,
     )
+
+    # Sauvegarde le plan pour le suivi
+    from ai_coach.plan_tracker import save_plan
+    save_plan(
+        plan_text=plan_text,
+        start_date=date.today().isoformat(),
+        days=horizon_days,
+    )
+
+    return plan_text
 
 
 async def ask_coach_async(
