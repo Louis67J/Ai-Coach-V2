@@ -22,6 +22,7 @@ from ai_coach.coach import ask_coach, generate_plan, ask_coach_async, generate_p
 from ai_coach.config import OUTPUTS_DIR, load_config
 from ai_coach.intervals import load_cached_activities, refresh_cache
 from discord.ext import commands, tasks
+from ai_coach.rag import search_similar
 
 # Mapping des commandes vers des channels dédiés (optionnel).
 # Si un channel n'existe pas, la réponse va dans le channel d'origine.
@@ -207,9 +208,65 @@ async def help_coach(ctx: commands.Context) -> None:
         "`!journal [n]` — affiche les dernières entrées RPE\n"
         "`!cost` — consommation tokens et coût estimé\n"
         "`!followup` — compare le plan prescrit vs réalisé\n"
+        "`!remember <sujet>` — cherche dans la mémoire sémantique\n"
+        "`!rag_index` — indexe tout l'historique dans la base RAG\n"
+        "`!rag_stats` — statistiques de la base RAG\n"
         "`!help_coach` — cette aide\n"
     )
     await ctx.send(text)
+
+@bot.command(name="remember")
+async def cmd_remember(ctx: commands.Context, *, query: str) -> None:
+    """Cherche dans la mémoire sémantique. Usage: !remember genou gauche"""
+    await ctx.send(f"🔍 Recherche dans la mémoire : *{query}*...")
+    async with ctx.typing():
+        import asyncio
+        results = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: search_similar(query, n_results=5),
+        )
+
+    if not results:
+        await ctx.send("Aucun échange passé trouvé sur ce sujet.")
+        return
+
+    lines = [f"🧠 **{len(results)} échange(s) trouvé(s) :**\n"]
+    for r in results:
+        lines.append(
+            f"📅 **{r['date']}** (pertinence: {r['similarity']:.0%})\n"
+            f"❓ {r['question']}\n"
+            f"💬 {r['answer_preview'][:200]}...\n"
+        )
+    await send_long(ctx, "\n".join(lines))
+
+
+@bot.command(name="rag_index")
+async def cmd_rag_index(ctx: commands.Context) -> None:
+    """Indexe toutes les conversations existantes dans la base RAG."""
+    await ctx.send("🧠 Indexation de l'historique conversationnel...")
+    async with ctx.typing():
+        import asyncio
+        from ai_coach.rag import index_all_from_memory, get_stats
+        count = await asyncio.get_event_loop().run_in_executor(
+            None, index_all_from_memory,
+        )
+        stats = get_stats()
+    await ctx.send(
+        f"✅ {count} échanges indexés.\n"
+        f"📊 Base RAG : {stats['total_indexed']} échanges au total."
+    )
+
+
+@bot.command(name="rag_stats")
+async def cmd_rag_stats(ctx: commands.Context) -> None:
+    """Statistiques de la base RAG."""
+    from ai_coach.rag import get_stats
+    stats = get_stats()
+    await ctx.send(
+        f"🧠 **Base RAG**\n"
+        f"Échanges indexés : {stats['total_indexed']}\n"
+        f"Stockage : `{stats['storage_path']}`"
+    )
+
 
 @bot.command(name="cost")
 async def cmd_cost(ctx: commands.Context) -> None:

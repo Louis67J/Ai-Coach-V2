@@ -29,6 +29,8 @@ from ai_coach.wellness import build_wellness_summary, fetch_wellness, format_wel
 
 from ai_coach.token_tracker import log_usage
 
+from ai_coach.rag import index_exchange as rag_index, search_similar, format_rag_results_for_llm
+
 # Modèle par défaut. Overridable via env var ANTHROPIC_MODEL.
 DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
 
@@ -279,6 +281,30 @@ TOOLS = [
             },
         },
     },
+    {
+        "name": "search_past_conversations",
+        "description": (
+            "Recherche dans les conversations passées par similarité sémantique. "
+            "Permet de retrouver ce qu'on a dit sur un sujet précis, même il y a "
+            "plusieurs semaines ou mois. Utilise ce tool quand l'athlète fait "
+            "référence à une discussion passée ou quand tu veux vérifier "
+            "ce qui a déjà été conseillé sur un sujet."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Le sujet ou la question à rechercher dans l'historique",
+                },
+                "n_results": {
+                    "type": "integer",
+                    "description": "Nombre de résultats (défaut 5)",
+                },
+            },
+            "required": ["query"],
+        },
+    },
 ]
 
 
@@ -308,10 +334,23 @@ def _execute_tool(name: str, input_data: dict) -> str:
             return _tool_get_journal_rpe(input_data)
         elif name == "get_plan_followup":
             return _tool_get_plan_followup(input_data)
+        elif name == "search_past_conversations":
+            return _tool_search_conversations(input_data)
         else:
             return json.dumps({"error": f"Outil inconnu: {name}"})
     except Exception as e:
         return json.dumps({"error": f"Erreur {name}: {str(e)}"})
+
+
+def _tool_search_conversations(input_data: dict) -> str:
+    query = input_data.get("query", "")
+    n = input_data.get("n_results", 5)
+    if not query:
+        return json.dumps({"error": "Query vide"})
+    results = search_similar(query, n_results=n)
+    if not results:
+        return json.dumps({"message": "Aucun échange passé trouvé sur ce sujet"})
+    return format_rag_results_for_llm(results)
 
 
 def _tool_get_plan_followup(input_data: dict) -> str:
@@ -602,12 +641,23 @@ def ask_coach(
     history = load_recent_exchanges(limit=history_limit)
     history_messages = to_anthropic_messages(history)
 
+    # Recherche sémantique dans les conversations passées (RAG)
+    rag_results = []
+    rag_text = ""
+    if not light:
+        try:
+            rag_results = search_similar(question, n_results=3)
+            rag_text = format_rag_results_for_llm(rag_results)
+        except Exception as e:
+            print(f"  ⚠️ RAG search failed: {e}")
+
     # --- Construction du message utilisateur ---
     current_user_message = (
         f"{profile_text}\n\n"
         f"{calendar_text}\n\n"
         f"{fitness_text}\n\n"
         f"{memory_text}\n\n"
+        f"{rag_text}\n\n"
         f"=== Ma question ===\n{question}"
     )
 
@@ -687,7 +737,16 @@ def ask_coach(
             source=source,
             metadata=metadata,
         )
-
+        # Indexe aussi dans la base RAG
+        try:
+            rag_index(
+                question=question,
+                answer=answer,
+                source=source,
+                metadata=metadata,
+            )
+        except Exception:
+            pass  # RAG est optionnel, on ne bloque pas si ça échoue
     return answer
 
 
