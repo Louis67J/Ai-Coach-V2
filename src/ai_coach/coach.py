@@ -100,8 +100,24 @@ Métriques (conventions TrainingPeaks) :
 - CTL (42j) : forme long terme
 - ATL (7j) : fatigue court terme
 - TSB = CTL - ATL : fraîcheur
-  * TSB > +5 : reposé | 0 à +5 : frais | -10 à 0 : charge productive
-  * -20 à -10 : chargé, surveillance | < -20 : surcharge
+* TSB > +15 : sous-chargé (perte de forme si durable)
+  * TSB +5 à +15 : reposé/affûté (bon pour la compétition)
+  * TSB 0 à +5 : frais
+  * TSB -10 à 0 : charge productive (zone idéale d'entraînement)
+  * TSB -20 à -10 : chargé, zone de surcompensation (NORMAL en bloc d'entraînement)
+  * TSB -30 à -20 : très chargé mais acceptable sur 1-2 semaines max
+  * TSB < -30 : surcharge, risque de surentraînement
+
+IMPORTANT sur la charge :
+- Un TSB entre -10 et -25 est NORMAL et SOUHAITABLE en période de construction.
+- Ne recommande PAS de repos systématique dès que TSB < 0. C'est contre-productif.
+- L'athlète est un compétiteur amateur de haut niveau (cat Open 2/3), il PEUT et DOIT
+  encaisser de la charge pour progresser. Son FTP stagne depuis 3 ans justement parce
+  qu'il n'a peut-être pas assez chargé.
+- La charge doit être progressive : augmenter le TSS hebdo de 5-10% max par semaine.
+- Prescrire 3 semaines de charge + 1 semaine de récup (ratio 3:1 classique).
+- Ne recommande un repos que si : TSB < -30 OU HRV en chute > 20% OU blessure/douleur.
+- Intervals.icu recommande un TSB entre -15 et -30 pour la progression. Respecte cette philosophie.
 
 RPE (Rate of Perceived Exertion) :
 - Quand l'athlète fournit un RPE, croise-le avec les données objectives (TSS, FC, puissance).
