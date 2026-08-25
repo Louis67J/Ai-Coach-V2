@@ -520,8 +520,65 @@ _RECLASSIFY_CANDIDATE_TAGS = {
     "RIDE", "WORKOUT", "VIRTUALRIDE", "GRAVELRIDE", "INCONNU",
 }
 
+# Incrémenté quand la logique de classification évolue, pour que les fiches
+# déjà en cache soient reprises au prochain enrichissement.
+CLASSIFICATION_VERSION = 2
 
-def _classify_session(detail: dict, stream_analysis: dict | None = None) -> tuple[str, str | None]:
+
+def hr_zone_secs(detail: dict) -> dict[str, float]:
+    """
+    Temps par zone de FC, calculé par Intervals.icu avec les seuils de
+    l'athlète (icu_hr_zones / lthr). Format API : une simple liste ordonnée
+    Z1→Z7, contrairement aux zones de puissance qui sont des dicts.
+    """
+    if detail.get("icu_ignore_hr"):
+        return {}  # l'athlète a explicitement invalidé la FC de cette séance
+    times = detail.get("icu_hr_zone_times") or []
+    if not isinstance(times, list):
+        return {}
+    return {
+        f"Z{i + 1}": float(secs)
+        for i, secs in enumerate(times)
+        if isinstance(secs, (int, float)) and secs > 0
+    }
+
+
+def _classify_by_hr_zones(pct: dict[str, float]) -> str:
+    """
+    Classification à partir de la répartition du temps en zones de FC.
+
+    Seuils volontairement distincts de ceux de la puissance : la FC est
+    inerte (elle met du temps à monter et à redescendre), donc les efforts
+    courts y sont sous-représentés — un 30/30 ne fait quasiment jamais
+    apparaître de temps en Z5 cardiaque.
+    """
+    z1 = pct.get("Z1", 0)
+    z1z2 = z1 + pct.get("Z2", 0)
+    z3 = pct.get("Z3", 0)
+    z4 = pct.get("Z4", 0)
+    z5plus = pct.get("Z5", 0) + pct.get("Z6", 0) + pct.get("Z7", 0)
+
+    if z5plus >= 8:
+        return "VO2_PMA"
+    if z4 >= 12:
+        return "SEUIL"
+    if z3 >= 25:
+        return "TEMPO"
+    if z1 >= 80:
+        return "RECUP"
+    if z1z2 >= 90:
+        return "Z2_STRICT"
+    if z1z2 >= 75:
+        return "ENDURANCE"
+    if (z3 + z4 + z5plus) >= 30:
+        return "MIXTE_INTENSIF"
+    return "MIXTE_ENDURANCE"
+
+
+def _classify_session(
+    detail: dict,
+    stream_analysis: dict | None = None,
+) -> tuple[str, str | None, str]:
     """
     Classifie la séance en un tag court basé sur les zones, l'intensité,
     ET la structure des intervalles détectés.
@@ -530,8 +587,9 @@ def _classify_session(detail: dict, stream_analysis: dict | None = None) -> tupl
     estimer les zones quand icu_zone_times est vide, et (2) détecter un
     effort significatif que les laps Intervals.icu auraient raté.
 
-    Retourne (tag, stream_pattern) — stream_pattern est une description
-    textuelle de l'effort détecté via le stream, ou None si non applicable.
+    Retourne (tag, stream_pattern, basis) où basis vaut "power", "hr" ou
+    "none" : sans puissance, la lecture cardiaque reste valable mais elle
+    n'est pas équivalente, donc on garde la trace de ce sur quoi on s'appuie.
     """
     tag = _classify_by_zones_and_laps(detail, stream_analysis=stream_analysis)
 
@@ -542,7 +600,21 @@ def _classify_session(detail: dict, stream_analysis: dict | None = None) -> tupl
             tag = effort_tag
             stream_pattern = effort_desc
 
-    return tag, stream_pattern
+    has_power_zones = bool(detail.get("icu_zone_times")) or bool(
+        (stream_analysis or {}).get("zone_pct")
+    )
+    if has_power_zones:
+        return tag, stream_pattern, "power"
+
+    # Pas de puissance exploitable : on retombe sur la FC plutôt que de
+    # laisser le tag générique du type d'activité (RIDE, WORKOUT…).
+    hr_secs = hr_zone_secs(detail)
+    total = sum(hr_secs.values())
+    if total > 0:
+        hr_pct = {z: 100 * s / total for z, s in hr_secs.items()}
+        return _classify_by_hr_zones(hr_pct), stream_pattern, "hr"
+
+    return tag, stream_pattern, "none"
 
 
 def _classify_by_zones_and_laps(detail: dict, stream_analysis: dict | None = None) -> str:
@@ -672,8 +744,8 @@ def build_session_summary(
     stream_analysis = _compute_stream_analysis(streams, ftp) if streams else None
     power_bests = (stream_analysis or {}).get("power_bests", {})
 
-    # Classification auto (peut être affinée par le stream)
-    tag, stream_pattern = _classify_session(detail, stream_analysis=stream_analysis)
+    # Classification auto (affinée par le stream, ou basée sur la FC sans puissance)
+    tag, stream_pattern, basis = _classify_session(detail, stream_analysis=stream_analysis)
 
     # Pattern d'intervalles : priorité aux laps Intervals.icu, sinon le pattern détecté via stream
     interval_pattern = _detect_interval_pattern(intervals, ftp=ftp) or stream_pattern
@@ -697,6 +769,9 @@ def build_session_summary(
         "type": detail.get("type") or "?",
         "source": detail.get("source") or "?",
         "tag": tag,
+        # Sur quoi repose le tag : puissance, FC, ou rien d'exploitable
+        "classification_basis": basis,
+        "classification_version": CLASSIFICATION_VERSION,
 
         # Durée et distance
         "moving_time_s": detail.get("moving_time") or 0,
@@ -728,6 +803,10 @@ def build_session_summary(
             for z in (detail.get("icu_zone_times") or [])
             if isinstance(z, dict) and z.get("id") and z.get("id") != "SS"
         },
+        # Zones de FC, gardées à part : elles ne sont pas interchangeables
+        # avec les zones de puissance et ne doivent pas être agrégées ensemble
+        "hr_zone_secs": hr_zone_secs(detail),
+        "lthr": detail.get("lthr"),
         "sweet_spot_min": round(ss_secs / 60, 1) if ss_secs else 0,
 
         # Intervalles (résumé texte)
@@ -751,14 +830,30 @@ def build_session_summary(
 def _should_fetch_streams(detail: dict) -> bool:
     """
     Décide si ça vaut le coup de fetcher le stream de puissance (appel HTTP
-    en plus, ~1 point/seconde) pour cette séance : seulement si icu_zone_times
-    est vide, ou si la classification sans stream tombe dans un tag faible
-    qui pourrait cacher un effort raté par les laps Intervals.icu.
+    en plus, ~1 point/seconde) pour cette séance.
     """
+    # Sans puissance enregistrée, le stream n'apportera rien à la
+    # classification (elle passera par la FC) : autant s'épargner l'appel.
+    if not (detail.get("icu_average_watts") or detail.get("icu_weighted_avg_watts")):
+        return False
     if not detail.get("icu_zone_times"):
         return True
-    prelim_tag, _ = _classify_session(detail)
+    prelim_tag, _, _ = _classify_session(detail)
     return prelim_tag in _RECLASSIFY_CANDIDATE_TAGS
+
+
+def _needs_processing(cached_entry: dict | None) -> bool:
+    """
+    Faut-il (re)traiter cette activité ? Source unique de vérité, partagée
+    par enrich_sessions et count_pending_enrichment pour qu'ils ne divergent pas.
+    """
+    if cached_entry is None:
+        return True  # jamais enrichie
+    if cached_entry.get("tag") not in _RECLASSIFY_CANDIDATE_TAGS:
+        return False  # déjà classifiée de façon exploitable
+    if cached_entry.get("classification_version", 1) < CLASSIFICATION_VERSION:
+        return True  # la logique a évolué depuis
+    return not cached_entry.get("stream_checked")
 
 
 def count_pending_enrichment(activities: list[dict]) -> int:
@@ -766,16 +861,10 @@ def count_pending_enrichment(activities: list[dict]) -> int:
     from ai_coach.analysis import is_usable
 
     cache = _load_sessions_cache()
-    pending = 0
-    for act in activities:
-        if not is_usable(act):
-            continue
-        cached_entry = cache.get(act.get("id", ""))
-        if cached_entry is None:
-            pending += 1
-        elif not cached_entry.get("stream_checked") and cached_entry.get("tag") in _RECLASSIFY_CANDIDATE_TAGS:
-            pending += 1
-    return pending
+    return sum(
+        1 for act in activities
+        if is_usable(act) and _needs_processing(cache.get(act.get("id", "")))
+    )
 
 
 def enrich_sessions(
@@ -817,12 +906,9 @@ def enrich_sessions(
 
     todo = []
     for act in usable:
-        act_id = act.get("id", "")
-        cached_entry = cache.get(act_id)
-        if cached_entry is None:
-            todo.append((act, False))
-        elif not cached_entry.get("stream_checked") and cached_entry.get("tag") in _RECLASSIFY_CANDIDATE_TAGS:
-            todo.append((act, True))
+        cached_entry = cache.get(act.get("id", ""))
+        if _needs_processing(cached_entry):
+            todo.append((act, cached_entry is not None))
     total = min(len(todo), max_new)
 
     processed = 0

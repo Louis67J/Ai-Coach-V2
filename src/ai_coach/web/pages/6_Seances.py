@@ -28,6 +28,8 @@ selected_tags = st.multiselect("Filtrer par tag", options=tags, default=[])
 filtered = [s for s in sessions if not selected_tags or s.get("tag") in selected_tags]
 sessions_by_id = {s.get("id"): s for s in filtered}
 
+_BASIS_LABEL = {"power": "⚡ puissance", "hr": "❤️ FC", "none": "—"}
+
 df = pd.DataFrame(
     [
         {
@@ -35,6 +37,7 @@ df = pd.DataFrame(
             "Date": s.get("date"),
             "Nom": s.get("name"),
             "Tag": s.get("tag"),
+            "Base": _BASIS_LABEL.get(s.get("classification_basis"), "—"),
             "TSS": s.get("tss"),
             "NP (W)": s.get("np_watts"),
             "Pattern détecté": s.get("interval_pattern") or "—",
@@ -43,10 +46,14 @@ df = pd.DataFrame(
     ]
 )
 
-st.caption(f"{len(filtered)} séance(s) — clique une ligne pour voir le détail")
+st.caption(
+    f"{len(filtered)} séance(s) — clique une ligne pour voir le détail. "
+    "La colonne **Base** indique si le tag vient de la puissance ou, à défaut, "
+    "de la fréquence cardiaque (lecture valable mais moins précise sur les efforts courts)."
+)
 event = st.dataframe(
     df,
-    column_order=["Date", "Nom", "Tag", "TSS", "NP (W)", "Pattern détecté"],
+    column_order=["Date", "Nom", "Tag", "Base", "TSS", "NP (W)", "Pattern détecté"],
     width="stretch",
     hide_index=True,
     on_select="rerun",
@@ -69,6 +76,16 @@ c1.metric("Tag", target.get("tag"))
 c2.metric("TSS", target.get("tss"))
 c3.metric("NP", f"{target.get('np_watts', '?')}W")
 c4.metric("IF", target.get("intensity_factor"))
+
+basis = target.get("classification_basis")
+if basis == "hr":
+    st.info(
+        "Séance sans capteur de puissance : le tag est déduit du temps passé "
+        f"en zones de FC (LTHR {target.get('lthr', '?')}). La FC étant inerte, "
+        "les efforts très courts y sont sous-représentés."
+    )
+elif basis == "none":
+    st.warning("Ni puissance ni FC exploitable : cette séance n'a pas pu être classifiée.")
 
 if target.get("interval_pattern"):
     st.success(f"Pattern détecté : {target['interval_pattern']}")
