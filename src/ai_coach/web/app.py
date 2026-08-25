@@ -7,6 +7,7 @@ Lancement: streamlit run src/ai_coach/web/app.py
 """
 from __future__ import annotations
 
+import plotly.graph_objects as go
 import streamlit as st
 
 from ai_coach.charts import plot_sport_breakdown
@@ -66,6 +67,95 @@ if sport_breakdown:
     path = plot_sport_breakdown(sport_breakdown)
     if path:
         st.image(str(path))
+
+# --- Méthode d'entraînement ---
+zones = report.get("zone_distribution", {})
+volume = report.get("volume_vs_target", {})
+
+if (zones and zones.get("status") != "insufficient_data") or (
+    volume and volume.get("status") != "insufficient_data"
+):
+    st.subheader("Méthode d'entraînement")
+    col_zones, col_volume = st.columns(2)
+
+    with col_zones:
+        if zones and zones.get("status") != "insufficient_data":
+            st.markdown(f"**Répartition des intensités — modèle {zones['model']}**")
+            st.caption(
+                f"{zones['sessions']} séances / {zones['total_hours']}h "
+                f"sur les {zones['period_days']} derniers jours"
+            )
+
+            bands = [
+                ("Facile (Z1-Z2)", zones["low_pct"], "#4c9be8"),
+                ("Tempo/Seuil (Z3-Z4)", zones["mid_pct"], "#f2a154"),
+                ("Haute intensité (Z5+)", zones["high_pct"], "#e05c5c"),
+            ]
+            fig_zones = go.Figure()
+            for label, pct, color in bands:
+                fig_zones.add_trace(
+                    go.Bar(
+                        x=[pct], y=["Répartition"], name=f"{label} — {pct}%",
+                        orientation="h", marker_color=color,
+                        hovertemplate=f"{label}: {pct}%<extra></extra>",
+                    )
+                )
+            fig_zones.update_layout(
+                barmode="stack", height=170, template="plotly_white",
+                margin=dict(l=0, r=0, t=10, b=10),
+                xaxis=dict(range=[0, 100], ticksuffix="%", showgrid=False),
+                yaxis=dict(showticklabels=False),
+                legend=dict(orientation="h", yanchor="top", y=-0.2),
+            )
+            st.plotly_chart(fig_zones, use_container_width=True)
+            st.caption(zones["comment"])
+        else:
+            st.caption("Pas assez de séances enrichies pour lire la répartition des intensités.")
+
+    with col_volume:
+        if volume and volume.get("status") != "insufficient_data":
+            st.markdown("**Volume hebdomadaire vs objectif**")
+            target_label = volume.get("target_label")
+            st.caption(
+                f"Objectif du profil : {target_label}/sem"
+                if target_label
+                else "Aucun objectif de volume défini dans le profil."
+            )
+
+            weekly = volume.get("weekly", [])
+            fig_vol = go.Figure()
+            fig_vol.add_trace(
+                go.Bar(
+                    x=[w["week_ending"] for w in weekly],
+                    y=[w["hours"] for w in weekly],
+                    marker_color="#4c9be8", name="Heures",
+                    hovertemplate="%{x}<br>%{y}h<extra></extra>",
+                )
+            )
+            lo, hi = volume.get("target_min_hours"), volume.get("target_max_hours")
+            if lo is not None and hi is not None:
+                fig_vol.add_hrect(
+                    y0=lo, y1=hi, fillcolor="rgba(46,160,67,0.10)",
+                    line_width=0, annotation_text="cible", annotation_position="top left",
+                    annotation_font_size=10,
+                )
+            fig_vol.update_layout(
+                height=250, template="plotly_white", showlegend=False,
+                margin=dict(l=0, r=0, t=10, b=10),
+                yaxis=dict(title="heures", gridcolor="rgba(0,0,0,0.06)"),
+                xaxis=dict(showgrid=False),
+            )
+            st.plotly_chart(fig_vol, use_container_width=True)
+
+            verdict = volume.get("verdict")
+            if verdict:
+                in_target = volume.get("weeks_in_target", 0)
+                total_weeks = volume.get("weeks_analyzed", 0)
+                (st.success if in_target >= total_weeks / 2 else st.warning)(
+                    f"{verdict} {in_target}/{total_weeks} semaines dans la cible."
+                )
+        else:
+            st.caption("Pas assez d'historique pour comparer le volume à l'objectif.")
 
 # --- Métriques avancées ---
 st.subheader("Métriques avancées")

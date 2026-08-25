@@ -584,6 +584,195 @@ def _compute_power_profile_from_sessions(sessions: list[dict], weight_kg: float 
 
 # --- Rapport complet ---
 
+def _session_zone_secs(session: dict) -> dict[str, float]:
+    """
+    Secondes par zone pour une séance.
+
+    Utilise zone_secs quand il est présent (séances enrichies récemment),
+    sinon reconstruit depuis le résumé texte `zones` ("Z1:56% | Z2:28% …")
+    et la durée — approximation suffisante pour agréger une distribution
+    sur plusieurs semaines, et qui évite de tout ré-enrichir.
+    """
+    stored = session.get("zone_secs")
+    if stored:
+        return {z: float(s) for z, s in stored.items()}
+
+    zones_str = session.get("zones") or ""
+    duration = float(session.get("moving_time_s") or 0)
+    if not zones_str or duration <= 0:
+        return {}
+
+    out: dict[str, float] = {}
+    for part in zones_str.split("|"):
+        part = part.strip()
+        if ":" not in part:
+            continue
+        zid, pct_str = part.split(":", 1)
+        try:
+            pct = float(pct_str.strip().rstrip("%"))
+        except ValueError:
+            continue
+        out[zid.strip()] = duration * pct / 100
+    return out
+
+
+def compute_zone_distribution(sessions: list[dict], days: int = 90) -> dict[str, Any]:
+    """
+    Distribution du temps par zone sur une période, et lecture "méthode
+    d'entraînement" : polarisé, pyramidal ou orienté seuil.
+
+    Le modèle à 3 zones est celui utilisé dans la littérature :
+      - bas    : sous le premier seuil (Z1-Z2)
+      - milieu : tempo / seuil (Z3-Z4)
+      - haut   : au-dessus du second seuil (Z5+)
+    """
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    recent = [s for s in sessions if (s.get("date") or "") >= cutoff]
+
+    totals: dict[str, float] = {}
+    pi_values: list[tuple[float, float]] = []  # (polarization_index, poids=durée)
+    for s in recent:
+        for zid, secs in _session_zone_secs(s).items():
+            totals[zid] = totals.get(zid, 0) + secs
+        pi = s.get("polarization_index")
+        dur = float(s.get("moving_time_s") or 0)
+        if pi and dur > 0:
+            pi_values.append((float(pi), dur))
+
+    total_secs = sum(totals.values())
+    if total_secs <= 0:
+        return {"status": "insufficient_data", "period_days": days, "sessions": len(recent)}
+
+    def _pct(zone_ids: list[str]) -> float:
+        return round(100 * sum(totals.get(z, 0) for z in zone_ids) / total_secs, 1)
+
+    low = _pct(["Z1", "Z2"])
+    mid = _pct(["Z3", "Z4"])
+    high = _pct(["Z5", "Z6", "Z7"])
+
+    if low >= 70 and high >= mid:
+        model = "polarisé"
+        comment = "Beaucoup de facile, peu de zone intermédiaire, une vraie part d'intensité haute."
+    elif low >= 70:
+        model = "pyramidal"
+        comment = "Base facile solide, avec plus de tempo/seuil que d'intensité haute."
+    elif mid >= 30:
+        model = "orienté seuil"
+        comment = "Part importante de tempo/seuil — attention à la zone grise (trop dur pour récupérer, trop facile pour progresser)."
+    else:
+        model = "mixte"
+        comment = "Répartition sans dominante nette."
+
+    result: dict[str, Any] = {
+        "period_days": days,
+        "sessions": len(recent),
+        "total_hours": round(total_secs / 3600, 1),
+        "zone_pct": {z: round(100 * s / total_secs, 1) for z, s in sorted(totals.items())},
+        "low_pct": low,
+        "mid_pct": mid,
+        "high_pct": high,
+        "intensity_pct": round(mid + high, 1),
+        "model": model,
+        "comment": comment,
+    }
+
+    if pi_values:
+        weight = sum(w for _, w in pi_values)
+        result["polarization_index_avg"] = round(
+            sum(pi * w for pi, w in pi_values) / weight, 2
+        )
+
+    return result
+
+
+def _parse_hours_target(raw: Any) -> tuple[float, float] | None:
+    """
+    Parse un objectif de volume hebdo du profil ("8-14h", "10h", 12…)
+    en (min, max). Renvoie None si non interprétable.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw), float(raw)
+
+    cleaned = str(raw).lower().replace("h", " ").replace(",", ".")
+    numbers = []
+    for token in cleaned.replace("-", " - ").split():
+        try:
+            numbers.append(float(token))
+        except ValueError:
+            continue
+    if not numbers:
+        return None
+    return min(numbers), max(numbers)
+
+
+def compute_volume_vs_target(
+    activities: list[dict],
+    target_raw: Any,
+    weeks: int = 8,
+) -> dict[str, Any]:
+    """
+    Compare le volume hebdomadaire réellement réalisé à l'objectif du profil.
+
+    La semaine en cours est exclue (elle est incomplète et fausserait la lecture).
+    """
+    target = _parse_hours_target(target_raw)
+
+    usable = filter_usable(activities)
+    hours_by_week: dict[pd.Timestamp, float] = {}
+    for act in usable:
+        raw_date = (act.get("start_date_local") or "")[:10]
+        if not raw_date:
+            continue
+        try:
+            ts = pd.to_datetime(raw_date)
+        except (ValueError, TypeError):
+            continue
+        week_end = ts + pd.offsets.Week(weekday=6)  # dimanche de la semaine
+        hours_by_week[week_end] = hours_by_week.get(week_end, 0) + (act.get("moving_time") or 0) / 3600
+
+    if not hours_by_week:
+        return {"status": "insufficient_data"}
+
+    today = pd.Timestamp(date.today())
+    complete = sorted((wk, h) for wk, h in hours_by_week.items() if wk < today)
+    recent = complete[-weeks:]
+    if not recent:
+        return {"status": "insufficient_data"}
+
+    rows = []
+    for week_end, hours in recent:
+        row = {"week_ending": week_end.strftime("%Y-%m-%d"), "hours": round(hours, 1)}
+        if target:
+            lo, hi = target
+            row["status"] = "sous l'objectif" if hours < lo else ("au-dessus" if hours > hi else "dans la cible")
+        rows.append(row)
+
+    avg = round(sum(h for _, h in recent) / len(recent), 1)
+    result: dict[str, Any] = {
+        "weeks_analyzed": len(recent),
+        "avg_weekly_hours": avg,
+        "weekly": rows,
+    }
+
+    if target:
+        lo, hi = target
+        result["target_min_hours"] = lo
+        result["target_max_hours"] = hi
+        result["target_label"] = str(target_raw)
+        in_range = sum(1 for r in rows if r.get("status") == "dans la cible")
+        result["weeks_in_target"] = in_range
+        if avg < lo:
+            result["verdict"] = f"Volume moyen sous l'objectif ({avg}h vs {lo}h minimum)."
+        elif avg > hi:
+            result["verdict"] = f"Volume moyen au-dessus de l'objectif ({avg}h vs {hi}h maximum)."
+        else:
+            result["verdict"] = f"Volume moyen dans la cible ({avg}h pour {lo}-{hi}h visées)."
+
+    return result
+
+
 def build_recent_daily_log(activities: list[dict], days: int = 14) -> list[dict]:
     """
     Construit une liste jour par jour des N derniers jours, avec les séances
@@ -729,13 +918,16 @@ def build_report(activities: list[dict]) -> dict[str, Any]:
             # Trie chronologiquement pour les tendances
             enriched_chrono = sorted(enriched, key=lambda s: s.get("date", ""))
 
-            # Récupère le poids depuis le profil si disponible
+            # Récupère le poids et l'objectif de volume depuis le profil
+            weight = 63.0
+            hours_target = None
             try:
                 from ai_coach.profile import load_profile
                 profile_data = load_profile()
                 weight = profile_data.get("athlete", {}).get("weight_kg", 63.0)
+                hours_target = profile_data.get("context", {}).get("weekly_training_hours_target")
             except Exception:
-                weight = 63.0
+                pass
 
             # 3. Durabilité
             report["durability"] = compute_durability_index(enriched_chrono)
@@ -745,4 +937,9 @@ def build_report(activities: list[dict]) -> dict[str, Any]:
 
             # 5. Profil de puissance
             report["power_profile"] = compute_power_profile(enriched_chrono, weight_kg=weight)
+
+            # 6. Méthode d'entraînement : répartition des zones (polarisé /
+            #    pyramidal / seuil) et volume réalisé vs objectif du profil
+            report["zone_distribution"] = compute_zone_distribution(enriched_chrono, days=90)
+            report["volume_vs_target"] = compute_volume_vs_target(usable, hours_target, weeks=8)
     return report

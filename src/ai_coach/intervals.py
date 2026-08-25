@@ -721,8 +721,13 @@ def build_session_summary(
         "avg_cadence": detail.get("average_cadence"),
         "lr_balance": detail.get("avg_lr_balance"),
 
-        # Zones (résumé texte)
+        # Zones (résumé texte + secondes brutes pour l'agrégation)
         "zones": zones_str,
+        "zone_secs": {
+            z.get("id"): z.get("secs", 0)
+            for z in (detail.get("icu_zone_times") or [])
+            if isinstance(z, dict) and z.get("id") and z.get("id") != "SS"
+        },
         "sweet_spot_min": round(ss_secs / 60, 1) if ss_secs else 0,
 
         # Intervalles (résumé texte)
