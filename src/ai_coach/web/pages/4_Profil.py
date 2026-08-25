@@ -6,9 +6,14 @@ from datetime import date
 import streamlit as st
 
 from ai_coach.profile import (
+    PRIORITIES,
     ProfileNotFoundError,
+    get_objectives,
     load_profile,
     resolve_location,
+    save_profile,
+    set_objectives,
+    split_objectives,
     update_field,
 )
 from ai_coach.weather import geocode
@@ -27,7 +32,7 @@ except ProfileNotFoundError:
 
 athlete = profile.get("athlete", {})
 context = profile.get("context", {})
-objectives = profile.get("season_2026_objectives", [])
+objectives = get_objectives(profile)
 
 st.subheader("Athlète")
 c1, c2, c3, c4 = st.columns(4)
@@ -121,15 +126,116 @@ with col_weight:
         st.success(f"Poids mis à jour : {new_weight}kg")
         st.rerun()
 
-if objectives:
-    st.divider()
-    st.subheader("Objectifs de la saison")
-    for obj in objectives:
-        priority = obj.get("priority", "?")
-        icon = {"A": "🏆", "B": "🎯", "C": "🔹"}.get(priority, "•")
-        st.write(
-            f"{icon} **[{priority}] {obj.get('name', '?')}** — "
-            f"{obj.get('date', '?')} ({obj.get('type', '?')})"
+st.divider()
+st.subheader("Objectifs")
+st.caption(
+    "A = objectif majeur (on construit la saison autour) · "
+    "B = important (on s'y prépare sans tout sacrifier) · "
+    "C = bonus (on y va en forme, sans affûtage). "
+    "Le coach ne planifie que pour les objectifs à venir."
+)
+
+PRIORITY_ICONS = {"A": "🏆", "B": "🎯", "C": "🔹"}
+OBJECTIVE_TYPES = ["cyclosportive", "course", "performance metric", "stage", "autre"]
+
+upcoming, past = split_objectives(objectives)
+
+
+def _save(new_list: list[dict]) -> None:
+    current = load_profile()
+    set_objectives(current, new_list)
+    save_profile(current)
+
+
+def _render_objective(obj: dict, index: int) -> None:
+    priority = obj.get("priority", "?")
+    icon = PRIORITY_ICONS.get(priority, "•")
+    label = f"{icon} [{priority}] {obj.get('name', '?')} — {obj.get('date', '?')}"
+
+    with st.expander(label, expanded=False):
+        with st.form(f"obj_form_{index}"):
+            name = st.text_input("Nom", value=obj.get("name", ""))
+            c1, c2 = st.columns(2)
+            prio = c1.selectbox(
+                "Priorité", PRIORITIES,
+                index=PRIORITIES.index(priority) if priority in PRIORITIES else 2,
+            )
+            try:
+                obj_date = date.fromisoformat(obj.get("date", ""))
+            except ValueError:
+                obj_date = date.today()
+            new_date = c2.date_input("Date", value=obj_date)
+
+            obj_type = obj.get("type", "autre")
+            type_choice = st.selectbox(
+                "Type", OBJECTIVE_TYPES,
+                index=OBJECTIVE_TYPES.index(obj_type) if obj_type in OBJECTIVE_TYPES else len(OBJECTIVE_TYPES) - 1,
+            )
+            notes = st.text_area("Notes", value=obj.get("notes", ""))
+
+            col_save, col_del = st.columns(2)
+            saved = col_save.form_submit_button("💾 Enregistrer", type="primary")
+            deleted = col_del.form_submit_button("🗑️ Supprimer")
+
+        if saved:
+            updated = list(objectives)
+            # Repérage par identité : deux objectifs au contenu identique
+            # feraient sinon modifier le mauvais.
+            position = next(k for k, o in enumerate(objectives) if o is obj)
+            updated[position] = {
+                "priority": prio,
+                "name": name,
+                "date": new_date.isoformat(),
+                "type": type_choice,
+                "notes": notes,
+            }
+            _save(updated)
+            st.success("Objectif mis à jour.")
+            st.rerun()
+
+        if deleted:
+            updated = [o for o in objectives if o is not obj]
+            _save(updated)
+            st.success("Objectif supprimé.")
+            st.rerun()
+
+
+st.markdown("**À venir**")
+if upcoming:
+    for i, obj in enumerate(upcoming):
+        _render_objective(obj, i)
+else:
+    st.info("Aucun objectif à venir — le coach n'a rien vers quoi construire.")
+
+if past:
+    with st.expander(f"Objectifs passés ({len(past)})"):
+        st.caption(
+            "Conservés comme historique : le coach les voit comme écoulés "
+            "et ne planifie plus pour eux."
         )
-        if obj.get("notes"):
-            st.caption(obj["notes"])
+        for i, obj in enumerate(past):
+            _render_objective(obj, 1000 + i)
+
+with st.expander("➕ Ajouter un objectif"):
+    with st.form("new_objective"):
+        new_name = st.text_input("Nom", placeholder="ex: GFNY Villard de Lans")
+        c1, c2 = st.columns(2)
+        new_prio = c1.selectbox("Priorité", PRIORITIES, index=1)
+        new_date = c2.date_input("Date", value=date.today())
+        new_type = st.selectbox("Type", OBJECTIVE_TYPES)
+        new_notes = st.text_area("Notes", placeholder="Contexte, parcours, ambition…")
+        added = st.form_submit_button("Ajouter", type="primary")
+
+    if added:
+        if not new_name.strip():
+            st.error("Un objectif a besoin d'un nom.")
+        else:
+            _save(objectives + [{
+                "priority": new_prio,
+                "name": new_name.strip(),
+                "date": new_date.isoformat(),
+                "type": new_type,
+                "notes": new_notes.strip(),
+            }])
+            st.success(f"Objectif ajouté : {new_name}")
+            st.rerun()

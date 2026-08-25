@@ -82,29 +82,6 @@
       "Intervals.icu (suivi approfondi)"
     ]
   },
-  "season_2026_objectives": [
-    {
-      "name": "GFNY Villard de Lans",
-      "date": "2026-05-25",
-      "type": "cyclosportive",
-      "priority": "A",
-      "notes": "objectif principal de la saison à ce stade"
-    },
-    {
-      "name": "Cyclo Thierry Claveyrolat",
-      "date": "2026-05-02",
-      "type": "cyclosportive",
-      "priority": "B",
-      "notes": "course de préparation avant Villard"
-    },
-    {
-      "name": "FTP 325W",
-      "date": "2026-06-30",
-      "type": "performance metric",
-      "priority": "B",
-      "notes": "objectif chiffré, +15W vs niveau actuel (stagnation à 310W depuis 3 ans à casser)"
-    }
-  ],
   "strengths": [
     "efforts courts 30s-3min",
     "capacité 10min correcte",
@@ -197,5 +174,28 @@
     "created_at": "2026-04-15",
     "last_updated": "2026-08-25",
     "notes": "Profil initial. À enrichir avec l'usage et les conversations avec le coach."
-  }
+  },
+  "objectives": [
+    {
+      "name": "Cyclo Thierry Claveyrolat",
+      "date": "2026-05-02",
+      "type": "cyclosportive",
+      "priority": "B",
+      "notes": "course de préparation avant Villard"
+    },
+    {
+      "name": "GFNY Villard de Lans",
+      "date": "2026-05-25",
+      "type": "cyclosportive",
+      "priority": "A",
+      "notes": "objectif principal de la saison à ce stade"
+    },
+    {
+      "name": "FTP 325W",
+      "date": "2026-06-30",
+      "type": "performance metric",
+      "priority": "B",
+      "notes": "objectif chiffré, +15W vs niveau actuel (stagnation à 310W depuis 3 ans à casser)"
+    }
+  ]
 }

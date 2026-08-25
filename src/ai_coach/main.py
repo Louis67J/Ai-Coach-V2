@@ -122,9 +122,9 @@ def cmd_analyze() -> None:
     # Charge objectifs et projections pour le graphe fitness
     objectives = []
     try:
-        from ai_coach.profile import load_profile
+        from ai_coach.profile import get_objectives, load_profile
         profile_data = load_profile()
-        objectives = profile_data.get("season_2026_objectives", [])
+        objectives = get_objectives(profile_data)
     except Exception:
         pass
 

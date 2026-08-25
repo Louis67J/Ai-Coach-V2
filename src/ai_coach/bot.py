@@ -24,6 +24,7 @@ from ai_coach.coach import ask_coach, generate_plan, ask_coach_async, generate_p
 from ai_coach.config import OUTPUTS_DIR, load_config
 from ai_coach.intervals import load_cached_activities, refresh_cache
 from discord.ext import commands, tasks
+from ai_coach.profile import get_objectives
 from ai_coach.rag import search_similar
 
 # Mapping des commandes vers des channels dédiés (optionnel).
@@ -684,7 +685,7 @@ async def cmd_fitness(ctx: commands.Context) -> None:
     try:
         from ai_coach.profile import load_profile
         profile = load_profile()
-        objectives = profile.get("season_2026_objectives", [])
+        objectives = get_objectives(profile)
     except Exception:
         pass
 
@@ -724,7 +725,7 @@ async def cmd_fitness_html(ctx: commands.Context) -> None:
     try:
         from ai_coach.profile import load_profile
         profile = load_profile()
-        objectives = profile.get("season_2026_objectives", [])
+        objectives = get_objectives(profile)
     except Exception:
         pass
 

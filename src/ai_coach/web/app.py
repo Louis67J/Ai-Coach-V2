@@ -13,6 +13,7 @@ import streamlit as st
 from ai_coach.charts import plot_sport_breakdown
 from ai_coach.charts_interactive import build_fitness_fig
 from ai_coach.config import load_config
+from ai_coach.profile import get_objectives
 from ai_coach.web._shared import (
     get_fitness_df,
     get_plan_projection,
@@ -45,7 +46,7 @@ if cf.get("as_of"):
 # --- Graphe forme + projection + objectifs ---
 st.subheader("Forme & projection")
 fitness_df = get_fitness_df()
-objectives = profile.get("season_2026_objectives", [])
+objectives = get_objectives(profile)
 forecast = report.get("ctl_forecast", [])
 plan_projection = get_plan_projection(cf.get("ctl", 0), cf.get("atl", 0)) if cf else []
 fig = build_fitness_fig(

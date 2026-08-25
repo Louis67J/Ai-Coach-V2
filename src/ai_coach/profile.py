@@ -57,6 +57,54 @@ def update_field(path: list[str], value: Any) -> dict[str, Any]:
     return profile
 
 
+OBJECTIVES_KEY = "objectives"
+PRIORITIES = ("A", "B", "C")
+
+
+def get_objectives(profile: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    Objectifs de l'athlète, triés par date.
+
+    La clé historique était `season_2026_objectives` : figée sur une saison,
+    elle obligeait à toucher le code à chaque nouvelle année. On lit encore
+    les anciennes clés pour ne rien perdre, mais on écrit désormais dans une
+    clé neutre.
+    """
+    objectives = profile.get(OBJECTIVES_KEY)
+    if objectives is None:
+        legacy = [
+            key for key in profile
+            if key.startswith("season_") and key.endswith("_objectives")
+        ]
+        objectives = [obj for key in sorted(legacy) for obj in (profile.get(key) or [])]
+
+    return sorted(objectives or [], key=lambda o: o.get("date") or "9999")
+
+
+def set_objectives(profile: dict[str, Any], objectives: list[dict[str, Any]]) -> None:
+    """Écrit la liste dans la clé neutre et retire les anciennes clés de saison."""
+    profile[OBJECTIVES_KEY] = sorted(objectives, key=lambda o: o.get("date") or "9999")
+    for key in [k for k in list(profile) if k.startswith("season_") and k.endswith("_objectives")]:
+        del profile[key]
+
+
+def split_objectives(
+    objectives: list[dict[str, Any]],
+    today: date | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """
+    Sépare les objectifs à venir de ceux déjà passés.
+
+    Sans cette distinction, le coach continue de préparer une course qui a
+    eu lieu il y a trois mois.
+    """
+    today = today or date.today()
+    today_str = today.isoformat()
+    upcoming = [o for o in objectives if (o.get("date") or "9999") >= today_str]
+    past = [o for o in objectives if (o.get("date") or "9999") < today_str]
+    return upcoming, past
+
+
 def resolve_location(profile: dict[str, Any]) -> dict[str, Any]:
     """
     Où se trouve l'athlète *maintenant*, pour la météo et le terrain.
@@ -93,7 +141,7 @@ def format_profile_for_llm(profile: dict[str, Any]) -> str:
     """
     athlete = profile.get("athlete", {})
     context = profile.get("context", {})
-    objectives = profile.get("season_2026_objectives", [])
+    objectives = get_objectives(profile)
     strengths = profile.get("strengths", [])
     weaknesses = profile.get("weaknesses", [])
     injuries = profile.get("injury_history", {})
@@ -173,14 +221,36 @@ def format_profile_for_llm(profile: dict[str, Any]) -> str:
         lines.append(f"- Indisponibilités à venir : {', '.join(context['unavailable_dates'])}")
 
     if objectives:
-        lines.append("\n### Objectifs saison (priorité A=majeur, B=important, C=bonus)")
-        for obj in objectives:
-            lines.append(
+        upcoming, past = split_objectives(objectives)
+        today = date.today()
+
+        def _render(obj: dict[str, Any], with_countdown: bool) -> None:
+            line = (
                 f"- [{obj.get('priority', '?')}] {obj.get('name', '?')} "
                 f"({obj.get('date', '?')}, {obj.get('type', '?')})"
             )
+            if with_countdown and obj.get("date"):
+                try:
+                    days = (date.fromisoformat(obj["date"]) - today).days
+                    line += f" — dans {days} jours" if days else " — AUJOURD'HUI"
+                except ValueError:
+                    pass
+            lines.append(line)
             if obj.get("notes"):
                 lines.append(f"    → {obj['notes']}")
+
+        lines.append("\n### Objectifs À VENIR (priorité A=majeur, B=important, C=bonus)")
+        if upcoming:
+            for obj in upcoming:
+                _render(obj, with_countdown=True)
+        else:
+            lines.append("- Aucun objectif futur enregistré : à clarifier avec l'athlète.")
+
+        if past:
+            # Sans ce marquage, le coach prépare encore une course déjà courue.
+            lines.append("\n### Objectifs PASSÉS (déjà écoulés — ne plus planifier pour eux)")
+            for obj in past:
+                _render(obj, with_countdown=False)
 
     if strengths:
         lines.append("\n### Points forts")
