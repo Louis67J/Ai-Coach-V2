@@ -221,6 +221,54 @@ def compute_ctl_forecast(
     return projections
 
 
+def compute_fitness_projection_from_plan(
+    current_ctl: float,
+    current_atl: float,
+    plan_days: list[dict],
+    start_from: date | None = None,
+) -> list[dict]:
+    """
+    Projette la forme jour par jour **en supposant le plan suivi à la lettre**.
+
+    Contrairement à compute_ctl_forecast, qui extrapole la charge moyenne
+    récente, on utilise ici le TSS prescrit de chaque journée du plan : c'est
+    la trajectoire "si je m'y tiens".
+    """
+    if not plan_days:
+        return []
+
+    ctl_decay = 2 / (42 + 1)
+    atl_decay = 2 / (7 + 1)
+
+    ctl, atl = float(current_ctl), float(current_atl)
+    today = start_from or date.today()
+
+    projection = []
+    for day in sorted(plan_days, key=lambda d: d.get("date") or ""):
+        day_date = day.get("date")
+        if not day_date:
+            continue
+        try:
+            parsed = date.fromisoformat(day_date)
+        except ValueError:
+            continue
+        if parsed < today:
+            continue  # journée déjà passée : elle relève du réalisé, pas de la projection
+
+        tss = float(day.get("target_tss") or 0)
+        ctl = ctl * (1 - ctl_decay) + tss * ctl_decay
+        atl = atl * (1 - atl_decay) + tss * atl_decay
+        projection.append({
+            "date": day_date,
+            "planned_tss": round(tss, 0),
+            "ctl": round(ctl, 1),
+            "atl": round(atl, 1),
+            "tsb": round(ctl - atl, 1),
+        })
+
+    return projection
+
+
 def compute_durability_index(sessions: list[dict]) -> dict[str, Any]:
     """
     Indice de durabilité : compare la puissance en 1re vs 2e moitié

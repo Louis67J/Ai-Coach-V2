@@ -13,7 +13,12 @@ import streamlit as st
 from ai_coach.charts import plot_sport_breakdown
 from ai_coach.charts_interactive import build_fitness_fig
 from ai_coach.config import load_config
-from ai_coach.web._shared import get_fitness_df, get_profile_safe, get_report_or_stop
+from ai_coach.web._shared import (
+    get_fitness_df,
+    get_plan_projection,
+    get_profile_safe,
+    get_report_or_stop,
+)
 
 st.set_page_config(page_title="AI Coach — Dashboard", page_icon="🚴", layout="wide")
 
@@ -42,9 +47,21 @@ st.subheader("Forme & projection")
 fitness_df = get_fitness_df()
 objectives = profile.get("season_2026_objectives", [])
 forecast = report.get("ctl_forecast", [])
-fig = build_fitness_fig(fitness_df, objectives=objectives, forecast=forecast)
+plan_projection = get_plan_projection(cf.get("ctl", 0), cf.get("atl", 0)) if cf else []
+fig = build_fitness_fig(
+    fitness_df,
+    objectives=objectives,
+    forecast=forecast,
+    plan_projection=plan_projection,
+)
 if fig is not None:
     st.plotly_chart(fig, use_container_width=True)
+    if plan_projection:
+        end = plan_projection[-1]
+        st.caption(
+            f"En violet : ta forme si tu suis le plan en cours jusqu'au "
+            f"{end['date']} → CTL {end['ctl']}, TSB {end['tsb']}."
+        )
 else:
     st.info("Pas encore assez de données pour tracer la courbe de forme.")
 

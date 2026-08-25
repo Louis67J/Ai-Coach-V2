@@ -52,6 +52,22 @@ def get_report_or_stop() -> dict[str, Any]:
     return report
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def get_plan_projection(current_ctl: float, current_atl: float) -> list[dict]:
+    """
+    Trajectoire de forme si le dernier plan est suivi à la lettre.
+    Vide si aucun plan structuré n'existe encore.
+    """
+    from ai_coach.analysis import compute_fitness_projection_from_plan
+    from ai_coach.plan_tracker import load_recent_plans
+
+    plans = load_recent_plans(limit=1)
+    if not plans:
+        return []
+    days = (plans[0].get("structured") or {}).get("days") or []
+    return compute_fitness_projection_from_plan(current_ctl, current_atl, days)
+
+
 def get_profile_safe() -> dict[str, Any]:
     """Charge le profil, ou {} s'il n'existe pas encore."""
     try:
@@ -64,3 +80,4 @@ def invalidate_report_cache() -> None:
     """À appeler après un refresh/enrich pour forcer le recalcul du rapport."""
     get_report.clear()
     get_fitness_df.clear()
+    get_plan_projection.clear()

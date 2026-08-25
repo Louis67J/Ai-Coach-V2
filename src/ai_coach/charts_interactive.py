@@ -18,8 +18,15 @@ def build_fitness_fig(
     fitness_df: pd.DataFrame,
     objectives: list[dict] | None = None,
     forecast: list[dict] | None = None,
+    plan_projection: list[dict] | None = None,
 ) -> go.Figure | None:
-    """Construit la Figure Plotly CTL/ATL/TSB (sans l'écrire sur disque)."""
+    """
+    Construit la Figure Plotly CTL/ATL/TSB (sans l'écrire sur disque).
+
+    `forecast` projette la charge moyenne récente ; `plan_projection`
+    (cf analysis.compute_fitness_projection_from_plan) trace la trajectoire
+    obtenue si le plan en cours est suivi à la lettre.
+    """
     if fitness_df.empty:
         return None
 
@@ -64,6 +71,31 @@ def build_fitness_fig(
         fig.add_trace(
             go.Scatter(x=proj_dates, y=proj_ctls, name="CTL projeté",
                        line=dict(color="#1f77b4", width=2, dash="dot"), opacity=0.6),
+            secondary_y=True,
+        )
+
+    # Trajectoire "si je suis le plan"
+    if plan_projection:
+        last_date = fitness_df.index[-1]
+        last_ctl = float(fitness_df["ctl"].iloc[-1])
+        last_tsb = float(fitness_df["tsb"].iloc[-1])
+        plan_dates = [last_date] + [pd.to_datetime(p["date"]) for p in plan_projection]
+        fig.add_trace(
+            go.Scatter(
+                x=plan_dates, y=[last_ctl] + [p["ctl"] for p in plan_projection],
+                name="CTL si plan suivi",
+                line=dict(color="#8b5cf6", width=2.5),
+                hovertemplate="%{x|%d %b}<br>CTL projeté %{y:.1f}<extra></extra>",
+            ),
+            secondary_y=True,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=plan_dates, y=[last_tsb] + [p["tsb"] for p in plan_projection],
+                name="TSB si plan suivi",
+                line=dict(color="#8b5cf6", width=1.2, dash="dot"), opacity=0.7,
+                hovertemplate="%{x|%d %b}<br>TSB projeté %{y:.1f}<extra></extra>",
+            ),
             secondary_y=True,
         )
 

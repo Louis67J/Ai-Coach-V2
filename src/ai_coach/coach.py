@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import date, timedelta
 from typing import Any
 
@@ -354,8 +355,10 @@ def _tool_search_conversations(input_data: dict) -> str:
 
 
 def _tool_get_plan_followup(input_data: dict) -> str:
-    from ai_coach.plan_tracker import load_recent_plans, build_plan_vs_actual
-    from ai_coach.intervals import load_enriched_sessions
+    from ai_coach.plan_tracker import (
+        build_plan_vs_actual, compute_plan_adherence, load_recent_plans,
+    )
+    from ai_coach.intervals import load_cached_activities, load_enriched_sessions
 
     limit = input_data.get("limit", 1)
     plans = load_recent_plans(limit=limit)
@@ -363,10 +366,18 @@ def _tool_get_plan_followup(input_data: dict) -> str:
         return json.dumps({"message": "Aucun plan enregistré"})
 
     sessions = load_enriched_sessions()
+    activities = load_cached_activities()
     results = []
     for plan in plans:
-        comparison = build_plan_vs_actual(plan, sessions)
-        results.append(comparison)
+        parts = [build_plan_vs_actual(plan, sessions)]
+        # Mesure chiffrée de l'adhérence quand le plan a une version structurée
+        adherence = compute_plan_adherence(plan, activities)
+        if adherence.get("status") != "no_structured_plan":
+            parts.append(
+                "=== ADHÉRENCE MESURÉE ===\n"
+                + json.dumps(adherence, ensure_ascii=False, default=str)
+            )
+        results.append("\n\n".join(parts))
 
     return "\n\n".join(results)
 
@@ -750,34 +761,77 @@ def ask_coach(
     return answer
 
 
+_PLAN_JSON_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
+
+
+def _extract_structured_plan(plan_text: str) -> tuple[str, dict]:
+    """
+    Sépare le plan lisible du bloc JSON structuré que le coach est censé
+    émettre à la fin. Le JSON est ce qui rend le plan mesurable (adhérence,
+    projection de forme) ; sans lui on garde simplement le texte.
+    """
+    match = _PLAN_JSON_RE.search(plan_text)
+    if not match:
+        return plan_text, {}
+
+    try:
+        structured = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return plan_text, {}
+
+    if not isinstance(structured.get("days"), list):
+        return plan_text, {}
+
+    prose = (plan_text[: match.start()] + plan_text[match.end() :]).strip()
+    return prose, structured
+
+
 def generate_plan(
     report: dict[str, Any],
     horizon_days: int = 10,
     source: str = "cli",
     metadata: dict[str, Any] | None = None,
 ) -> str:
+    today = date.today()
+    dates = [(today + timedelta(days=i)).isoformat() for i in range(horizon_days)]
+
     question = (
-        f"Propose-moi un plan d'entraînement pour les {horizon_days} prochains jours, "
-        f"basé sur mon état de forme actuel et nos discussions précédentes si pertinent. "
-        f"Utilise les outils disponibles pour consulter ma wellness, la météo, "
+        f"Propose-moi un plan d'entraînement pour les {horizon_days} prochains jours "
+        f"({dates[0]} à {dates[-1]}), basé sur mon état de forme actuel et nos "
+        f"discussions précédentes si pertinent. "
+        f"Commence par appeler l'outil get_plan_followup : si un plan précédent existe, "
+        f"dis-moi en une ou deux phrases ce que j'en ai réellement fait, et tiens-en "
+        f"compte pour calibrer celui-ci (inutile de represcrire une charge que je n'ai "
+        f"pas tenue). "
+        f"Utilise aussi les outils pour consulter ma wellness, la météo, "
         f"et mes séances récentes si tu en as besoin. "
         f"Pour chaque jour: type de séance, durée, intensité cible, et une phrase sur l'objectif. "
         f"Inclus 2-3 séances de renforcement musculaire. "
-        f"Termine par 2-3 phrases sur la logique globale du bloc."
+        f"Termine par 2-3 phrases sur la logique globale du bloc.\n\n"
+        f"Puis, tout à la fin de ta réponse, ajoute un bloc ```json``` contenant la "
+        f"version structurée du même plan, au format exact :\n"
+        f'{{"days": [{{"date": "{dates[0]}", "type": "Endurance", '
+        f'"duration_min": 90, "target_tss": 65, "intensity": "Z2"}}]}}\n'
+        f"Une entrée par jour du plan, y compris les jours de repos "
+        f"(type \"Repos\", target_tss 0). Ce bloc me sert à suivre l'adhérence "
+        f"et à projeter ma forme : il doit refléter fidèlement le plan ci-dessus."
     )
-    plan_text = ask_coach(
+    raw_answer = ask_coach(
         question, report,
-        max_tokens=3000,
+        max_tokens=4000,
         source=source,
         metadata=metadata,
     )
+
+    plan_text, structured = _extract_structured_plan(raw_answer)
 
     # Sauvegarde le plan pour le suivi
     from ai_coach.plan_tracker import save_plan
     save_plan(
         plan_text=plan_text,
-        start_date=date.today().isoformat(),
+        start_date=today.isoformat(),
         days=horizon_days,
+        structured=structured,
     )
 
     return plan_text
