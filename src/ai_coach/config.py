@@ -8,11 +8,36 @@ typer, et documenter la config.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
 
+
+def _harden_console_encoding() -> None:
+    """
+    Rend stdout/stderr tolérants aux caractères non-ASCII.
+
+    Sous Windows, la console (et toute redirection vers un fichier) utilise
+    cp1252 par défaut : le moindre emoji dans un message de progression lève
+    une UnicodeEncodeError et fait planter l'appel complet — l'enrichissement
+    mourait sur son premier "🔁 Reclassification". On élargit l'encodage
+    plutôt que de bannir les emojis d'une base de code qui en utilise partout.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            # Flux déjà remplacé (tests, capture) ou non reconfigurable :
+            # on tente au moins de ne plus lever sur les caractères inconnus.
+            try:
+                stream.reconfigure(errors="replace")
+            except (AttributeError, ValueError, OSError):
+                pass
+
+
+_harden_console_encoding()
 
 # Charge .env une seule fois, au moment de l'import du module.
 load_dotenv()
