@@ -27,3 +27,6 @@ sentence-transformers>=3.0.0
 
 # Dashboard web
 streamlit>=1.38.0
+
+# Tests
+pytest>=8.0.0
