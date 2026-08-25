@@ -7,6 +7,8 @@ un accès autonome aux données d'entraînement.
 """
 from __future__ import annotations
 
+import logging
+
 import json
 import os
 import re
@@ -33,6 +35,9 @@ from ai_coach.token_tracker import log_usage
 from ai_coach.rag import index_exchange as rag_index, search_similar, format_rag_results_for_llm
 
 # Modèle par défaut. Overridable via env var ANTHROPIC_MODEL.
+logger = logging.getLogger(__name__)
+
+
 DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
 
 
@@ -660,7 +665,7 @@ def ask_coach(
             rag_results = search_similar(question, n_results=3)
             rag_text = format_rag_results_for_llm(rag_results)
         except Exception as e:
-            print(f"  ⚠️ RAG search failed: {e}")
+            logger.warning("Recherche RAG échouée: %s", e)
 
     # --- Construction du message utilisateur ---
     current_user_message = (
@@ -695,7 +700,7 @@ def ask_coach(
             except Exception as e:
                 if "rate_limit" in str(e).lower() and attempt < 2:
                     wait = 30 * (attempt + 1)
-                    print(f"  ⏳ Rate limit, attente {wait}s...")
+                    logger.info("Rate limit, attente %ss", wait)
                     time.sleep(wait)
                 else:
                     raise
@@ -725,7 +730,7 @@ def ask_coach(
         tool_results = []
         for block in response.content:
             if block.type == "tool_use":
-                print(f"  🔧 Outil appelé : {block.name}({json.dumps(block.input, ensure_ascii=False)})")
+                logger.info("Outil appelé : %s(%s)", block.name, json.dumps(block.input, ensure_ascii=False))
                 result = _execute_tool(block.name, block.input)
                 tool_results.append({
                     "type": "tool_result",

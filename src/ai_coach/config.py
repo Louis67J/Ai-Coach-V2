@@ -7,6 +7,7 @@ typer, et documenter la config.
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from dataclasses import dataclass
@@ -38,6 +39,20 @@ def _harden_console_encoding() -> None:
 
 
 _harden_console_encoding()
+
+
+def configure_logging(level: int = logging.INFO) -> None:
+    """
+    Branche les logs des modules métier sur la console.
+
+    À appeler par les points d'entrée (CLI, bot, dashboard) uniquement : les
+    modules métier se contentent d'émettre via `logging`, et c'est l'appelant
+    qui décide où ça sort. C'est ce qui permet à la même fonction de servir la
+    CLI, le bot Discord et Streamlit sans leur imposer sa sortie — et d'éviter
+    qu'un message de progression fasse tomber l'application qui l'appelle.
+    """
+    logging.basicConfig(level=level, format="%(message)s")
+
 
 # Charge .env une seule fois, au moment de l'import du module.
 load_dotenv()

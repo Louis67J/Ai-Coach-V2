@@ -13,8 +13,12 @@ import pandas as pd
 import streamlit as st
 
 from ai_coach.analysis import build_daily_tss, build_report, compute_fitness, filter_usable
+from ai_coach.config import configure_logging
 from ai_coach.intervals import load_cached_activities
 from ai_coach.profile import ProfileNotFoundError, load_profile
+
+# Point d'entrée web : les logs des modules métier sortent dans la console du serveur.
+configure_logging()
 
 
 @st.cache_data(ttl=300, show_spinner=False)

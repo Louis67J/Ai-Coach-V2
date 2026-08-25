@@ -4,10 +4,15 @@ Fournit les prévisions J+7 pour les injecter dans le contexte du coach.
 """
 from __future__ import annotations
 
+import logging
+
 from datetime import date
 from typing import Any
 
 import requests
+
+
+logger = logging.getLogger(__name__)
 
 
 def fetch_forecast(
@@ -43,7 +48,7 @@ def fetch_forecast(
         response.raise_for_status()
         data = response.json()
     except Exception as e:
-        print(f"  ⚠️ Météo indisponible: {e}")
+        logger.warning("Météo indisponible: %s", e)
         return None
 
     daily = data.get("daily", {})

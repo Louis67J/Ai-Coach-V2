@@ -5,6 +5,8 @@ Gère l'authentification, le fetch des activités, et le cache local en JSON.
 """
 from __future__ import annotations
 
+import logging
+
 import json
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
@@ -13,6 +15,9 @@ from pathlib import Path
 import requests
 
 from ai_coach.config import DATA_DIR, load_config
+
+
+logger = logging.getLogger(__name__)
 
 
 ACTIVITIES_CACHE = DATA_DIR / "activities.json"
@@ -45,14 +50,14 @@ class IntervalsClient:
             "newest": end.isoformat(),
         }
 
-        print(f"  → GET {url}")
-        print(f"    oldest={params['oldest']} newest={params['newest']}")
+        logger.debug("GET %s", url)
+        logger.debug("oldest=%s newest=%s", params["oldest"], params["newest"])
 
         response = requests.get(url, params=params, auth=self.auth, timeout=30)
         response.raise_for_status()
 
         activities = response.json()
-        print(f"  ✓ {len(activities)} activités récupérées")
+        logger.info("%d activités récupérées", len(activities))
         return activities
 
 
@@ -74,7 +79,7 @@ def refresh_cache(
     end = end or date.today()
     start = start or (end - timedelta(days=days))
 
-    print(f"📡 Fetch Intervals.icu ({start.isoformat()} → {end.isoformat()})")
+    logger.info("Fetch Intervals.icu (%s → %s)", start.isoformat(), end.isoformat())
     activities = client.fetch_activities(start=start, end=end)
 
     # Ajoute un petit wrapper avec des métadonnées
@@ -90,7 +95,7 @@ def refresh_cache(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    print(f"💾 Cache écrit: {ACTIVITIES_CACHE}")
+    logger.info("Cache écrit: %s", ACTIVITIES_CACHE)
 
     return activities
 
@@ -137,7 +142,7 @@ def fetch_activity_detail(activity_id: str) -> dict | None:
             return data
         return None
     except Exception as e:
-        print(f"  ⚠️ Échec fetch détail {activity_id}: {e}")
+        logger.warning("Échec fetch détail %s: %s", activity_id, e)
         return None
 
 def fetch_activity_intervals(activity_id: str) -> dict | None:
@@ -152,7 +157,7 @@ def fetch_activity_intervals(activity_id: str) -> dict | None:
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        print(f"  ⚠️ Échec fetch intervalles {activity_id}: {e}")
+        logger.warning("Échec fetch intervalles %s: %s", activity_id, e)
         return None
 
 def fetch_activity_streams(
@@ -178,7 +183,7 @@ def fetch_activity_streams(
                 streams[stype] = sdata
         return streams
     except Exception as e:
-        print(f"  ⚠️ Échec fetch streams {activity_id}: {e}")
+        logger.warning("Échec fetch streams %s: %s", activity_id, e)
         return None
 
 def _compute_stream_analysis(streams: dict[str, list], ftp: int) -> dict:
@@ -287,7 +292,7 @@ def fetch_power_curves(sport_type: str = "Ride") -> dict | None:
                 return curves[0]  # Premier élément = courbe par défaut (1 an)
         return None
     except Exception as e:
-        print(f"  ⚠️ Échec fetch power curves: {e}")
+        logger.warning("Échec fetch power curves: %s", e)
         return None
 
 
@@ -916,7 +921,7 @@ def enrich_sessions(
     for act, is_reclassification in todo[:max_new]:
         act_id = act.get("id", "")
         name = act.get("name", "?")[:40]
-        print(f"  {'🔁 Reclassification' if is_reclassification else '🔍 Enrichissement'}: {name}...")
+        logger.info("%s: %s", "Reclassification" if is_reclassification else "Enrichissement", name)
         if progress_cb:
             progress_cb(processed, total, name)
 
@@ -934,14 +939,13 @@ def enrich_sessions(
                 _save_sessions_cache(cache)
 
     if len(todo) > max_new:
-        print(f"  ⏸️ Limite de {max_new} traitements atteinte "
-              f"({len(todo) - max_new} restantes). Relance pour continuer.")
+        logger.info("Limite de %d traitements atteinte (%d restantes)", max_new, len(todo) - max_new)
 
     _save_sessions_cache(cache)
     if progress_cb:
         progress_cb(processed, total, "terminé")
-    print(f"  💾 Cache sessions: {len(cache)} fiches "
-          f"(+{processed - reclassified_count} nouvelles, {reclassified_count} reclassifiées)")
+    logger.info("Cache sessions: %d fiches (+%d nouvelles, %d reclassifiées)",
+                len(cache), processed - reclassified_count, reclassified_count)
 
     return list(cache.values())
 

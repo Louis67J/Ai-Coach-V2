@@ -10,6 +10,8 @@ les plus similaires pour les injecter dans le contexte du coach.
 """
 from __future__ import annotations
 
+import logging
+
 import json
 import hashlib
 from datetime import datetime
@@ -17,6 +19,9 @@ from pathlib import Path
 from typing import Any
 
 from ai_coach.config import DATA_DIR
+
+
+logger = logging.getLogger(__name__)
 
 
 RAG_DIR = DATA_DIR / "rag"
@@ -31,11 +36,11 @@ def _get_embedding_model():
     """Charge le modèle d'embedding (une seule fois)."""
     global _embedding_model
     if _embedding_model is None:
-        print("  🧠 Chargement du modèle d'embedding (première fois uniquement)...")
+        logger.info("Chargement du modèle d'embedding (première fois uniquement)...")
         from sentence_transformers import SentenceTransformer
         # Modèle léger et multilingue — bon pour le français
         _embedding_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
-        print("  ✅ Modèle chargé")
+        logger.info("Modèle d'embedding chargé")
     return _embedding_model
 
 

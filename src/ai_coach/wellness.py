@@ -4,6 +4,8 @@ Sources possibles : Whoop, Garmin, saisie manuelle.
 """
 from __future__ import annotations
 
+import logging
+
 import json
 from datetime import date, timedelta
 from typing import Any
@@ -12,6 +14,9 @@ import requests
 
 from ai_coach.config import DATA_DIR
 from ai_coach.intervals import IntervalsClient
+
+
+logger = logging.getLogger(__name__)
 
 
 WELLNESS_CACHE = DATA_DIR / "wellness.json"
@@ -38,7 +43,7 @@ def fetch_wellness(days: int = 14) -> list[dict]:
         )
         return data
     except Exception as e:
-        print(f"  ⚠️ Wellness fetch failed: {e}")
+        logger.warning("Fetch wellness échoué: %s", e)
         return []
 
 

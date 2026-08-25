@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from ai_coach.config import load_config
+from ai_coach.config import configure_logging, load_config
 from ai_coach.intervals import load_cached_activities, refresh_cache
 
 import json
@@ -413,6 +413,9 @@ def cmd_power_curve() -> None:
 
 
 def main() -> None:
+    # Point d'entrée : c'est ici qu'on décide où vont les logs des modules métier.
+    configure_logging()
+
     parser = argparse.ArgumentParser(prog="ai-coach")
     subparsers = parser.add_subparsers(dest="command", required=True)
 

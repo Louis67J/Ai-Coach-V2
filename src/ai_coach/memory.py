@@ -19,12 +19,17 @@ Format d'un échange (une ligne JSON par échange):
 """
 from __future__ import annotations
 
+import logging
+
 import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from ai_coach.config import DATA_DIR
+
+
+logger = logging.getLogger(__name__)
 
 
 CONVERSATIONS_PATH = DATA_DIR / "conversations.jsonl"
@@ -250,8 +255,8 @@ def summarize_old_exchanges(
             metadata=ex.get("metadata"),
         )
 
-    print(f"  🧠 Mémoire compactée : {len(old_exchanges)} anciens échanges → résumé "
-          f"({len(summary)} chars), {len(recent_exchanges)} récents gardés")
+    logger.info("Mémoire compactée : %d anciens échanges → résumé (%d chars), %d récents gardés",
+                len(old_exchanges), len(summary), len(recent_exchanges))
 
     return summary
 
