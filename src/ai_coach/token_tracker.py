@@ -9,11 +9,12 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from ai_coach.config import DATA_DIR
+from ai_coach.config import athlete_path
 
 
-TRACKER_PATH = DATA_DIR / "token_usage.jsonl"
-
+def tracker_path() -> Path:
+    """Chemin du fichier token_usage.jsonl pour l'athlète courant."""
+    return athlete_path("token_usage.jsonl")
 # Tarifs Claude Sonnet 4.5 ($/million tokens) — à jour avril 2026
 PRICING = {
     "claude-sonnet-4-5": {"input": 3.0, "output": 15.0},
@@ -47,7 +48,7 @@ def log_usage(
         "question": question_preview[:80],
     }
 
-    with TRACKER_PATH.open("a", encoding="utf-8") as f:
+    with tracker_path().open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     return entry
@@ -55,11 +56,11 @@ def log_usage(
 
 def get_usage_summary() -> dict[str, Any]:
     """Résumé de la consommation : aujourd'hui, cette semaine, total."""
-    if not TRACKER_PATH.exists():
+    if not tracker_path().exists():
         return {"total_calls": 0, "total_cost": 0}
 
     entries = []
-    with TRACKER_PATH.open("r", encoding="utf-8") as f:
+    with tracker_path().open("r", encoding="utf-8") as f:
         for line in f:
             if line.strip():
                 try:

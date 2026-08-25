@@ -26,15 +26,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ai_coach.config import DATA_DIR
+from ai_coach.config import athlete_path
 
 
 logger = logging.getLogger(__name__)
 
 
-CONVERSATIONS_PATH = DATA_DIR / "conversations.jsonl"
-
-
+def conversations_path() -> Path:
+    """Chemin du fichier conversations.jsonl pour l'athlète courant."""
+    return athlete_path("conversations.jsonl")
 def append_exchange(
     question: str,
     answer: str,
@@ -58,7 +58,7 @@ def append_exchange(
         "metadata": metadata or {},
     }
     # Append en mode 'a' = ajoute en fin de fichier sans écraser
-    with CONVERSATIONS_PATH.open("a", encoding="utf-8") as f:
+    with conversations_path().open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
@@ -69,13 +69,13 @@ def load_recent_exchanges(limit: int = 20) -> list[dict[str, Any]]:
     Returns:
         Liste des échanges du plus ancien au plus récent (ordre chronologique)
     """
-    if not CONVERSATIONS_PATH.exists():
+    if not conversations_path().exists():
         return []
 
     # Lit tout le fichier — pour des volumes raisonnables (< 10k échanges)
     # c'est négligeable. À optimiser si on dépasse un jour.
     exchanges = []
-    with CONVERSATIONS_PATH.open("r", encoding="utf-8") as f:
+    with conversations_path().open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -111,9 +111,9 @@ def to_anthropic_messages(exchanges: list[dict[str, Any]]) -> list[dict[str, str
 
 def count_exchanges() -> int:
     """Nombre total d'échanges en mémoire."""
-    if not CONVERSATIONS_PATH.exists():
+    if not conversations_path().exists():
         return 0
-    with CONVERSATIONS_PATH.open("r", encoding="utf-8") as f:
+    with conversations_path().open("r", encoding="utf-8") as f:
         return sum(1 for line in f if line.strip())
 
 
@@ -123,8 +123,8 @@ def clear_all() -> int:
     Returns: nombre d'échanges qui ont été effacés.
     """
     n = count_exchanges()
-    if CONVERSATIONS_PATH.exists():
-        CONVERSATIONS_PATH.unlink()
+    if conversations_path().exists():
+        conversations_path().unlink()
     return n
 
 
@@ -133,10 +133,10 @@ def remove_last() -> bool:
     Supprime le dernier échange.
     Returns: True si un échange a été supprimé, False sinon.
     """
-    if not CONVERSATIONS_PATH.exists():
+    if not conversations_path().exists():
         return False
 
-    lines = CONVERSATIONS_PATH.read_text(encoding="utf-8").splitlines()
+    lines = conversations_path().read_text(encoding="utf-8").splitlines()
     if not lines:
         return False
 
@@ -147,7 +147,7 @@ def remove_last() -> bool:
         return False
     lines.pop()
 
-    CONVERSATIONS_PATH.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    conversations_path().write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
     return True
 
 
@@ -242,11 +242,11 @@ def summarize_old_exchanges(
     ).strip()
 
     # Sauvegarde le résumé
-    SUMMARY_PATH.write_text(summary, encoding="utf-8")
+    summary_path().write_text(summary, encoding="utf-8")
 
     # Réécrit le fichier conversations avec seulement les récents
-    if CONVERSATIONS_PATH.exists():
-        CONVERSATIONS_PATH.unlink()
+    if conversations_path().exists():
+        conversations_path().unlink()
     for ex in recent_exchanges:
         append_exchange(
             question=ex["question"],
@@ -261,11 +261,11 @@ def summarize_old_exchanges(
     return summary
 
 
-SUMMARY_PATH = DATA_DIR / "memory_summary.txt"
-
-
+def summary_path() -> Path:
+    """Chemin du fichier memory_summary.txt pour l'athlète courant."""
+    return athlete_path("memory_summary.txt")
 def load_memory_summary() -> str:
     """Charge le résumé de mémoire long terme s'il existe."""
-    if SUMMARY_PATH.exists():
-        return SUMMARY_PATH.read_text(encoding="utf-8").strip()
+    if summary_path().exists():
+        return summary_path().read_text(encoding="utf-8").strip()
     return ""

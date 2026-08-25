@@ -54,6 +54,48 @@ def configure_logging(level: int = logging.INFO) -> None:
     logging.basicConfig(level=level, format="%(message)s")
 
 
+# --- Athlète courant ---------------------------------------------------
+#
+# Tout est aujourd'hui mono-athlète, mais les chemins de données passent par
+# ici plutôt que d'être figés à l'import. C'est la seule couture nécessaire
+# pour qu'ouvrir l'app à quelqu'un d'autre ne demande pas de reprendre chaque
+# module : il suffira de positionner l'athlète courant en début de requête.
+
+DEFAULT_ATHLETE = "me"
+_current_athlete = DEFAULT_ATHLETE
+
+
+def current_athlete() -> str:
+    return _current_athlete
+
+
+def set_current_athlete(slug: str) -> None:
+    """Bascule l'athlète dont on lit/écrit les données."""
+    global _current_athlete
+    _current_athlete = slug or DEFAULT_ATHLETE
+
+
+def athlete_data_dir(athlete: str | None = None) -> Path:
+    """
+    Dossier de données d'un athlète.
+
+    L'athlète par défaut garde la racine `data/` : les fichiers existants ne
+    bougent pas, et rien ne change pour une installation mono-utilisateur.
+    Tout autre athlète est isolé dans `data/athletes/<slug>/`.
+    """
+    athlete = athlete or current_athlete()
+    if athlete == DEFAULT_ATHLETE:
+        return DATA_DIR
+    path = DATA_DIR / "athletes" / athlete
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def athlete_path(filename: str, athlete: str | None = None) -> Path:
+    """Chemin d'un fichier de données pour l'athlète courant."""
+    return athlete_data_dir(athlete) / filename
+
+
 # Charge .env une seule fois, au moment de l'import du module.
 load_dotenv()
 

@@ -8,12 +8,14 @@ import json
 from datetime import date, datetime
 from typing import Any
 
-from ai_coach.config import DATA_DIR
+from pathlib import Path
+
+from ai_coach.config import athlete_path
 
 
-JOURNAL_PATH = DATA_DIR / "journal.jsonl"
-
-
+def journal_path() -> Path:
+    """Chemin du fichier journal.jsonl pour l'athlète courant."""
+    return athlete_path("journal.jsonl")
 def add_entry(
     rpe: int,
     notes: str = "",
@@ -37,7 +39,7 @@ def add_entry(
         "tags": tags or [],
     }
 
-    with JOURNAL_PATH.open("a", encoding="utf-8") as f:
+    with journal_path().open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     return entry
@@ -45,11 +47,11 @@ def add_entry(
 
 def load_recent_entries(limit: int = 14) -> list[dict]:
     """Charge les N dernières entrées du journal."""
-    if not JOURNAL_PATH.exists():
+    if not journal_path().exists():
         return []
 
     entries = []
-    with JOURNAL_PATH.open("r", encoding="utf-8") as f:
+    with journal_path().open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -106,7 +108,7 @@ def format_journal_for_llm(entries: list[dict]) -> str:
 
 
 def count_entries() -> int:
-    if not JOURNAL_PATH.exists():
+    if not journal_path().exists():
         return 0
-    with JOURNAL_PATH.open("r", encoding="utf-8") as f:
+    with journal_path().open("r", encoding="utf-8") as f:
         return sum(1 for line in f if line.strip())

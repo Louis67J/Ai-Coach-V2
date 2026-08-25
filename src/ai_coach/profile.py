@@ -13,31 +13,31 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from ai_coach.config import DATA_DIR
+from ai_coach.config import athlete_path
 
 
-PROFILE_PATH = DATA_DIR / "profile.json"
-
-
+def profile_path() -> Path:
+    """Chemin du fichier profile.json pour l'athlète courant."""
+    return athlete_path("profile.json")
 class ProfileNotFoundError(RuntimeError):
     pass
 
 
 def load_profile() -> dict[str, Any]:
     """Charge le profil depuis disque. Lève si absent."""
-    if not PROFILE_PATH.exists():
+    if not profile_path().exists():
         raise ProfileNotFoundError(
-            f"❌ Aucun profil trouvé à {PROFILE_PATH}. "
+            f"❌ Aucun profil trouvé à {profile_path()}. "
             f"Crée-le manuellement (voir documentation)."
         )
-    return json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
+    return json.loads(profile_path().read_text(encoding="utf-8"))
 
 
 def save_profile(profile: dict[str, Any]) -> None:
     """Écrit le profil à disque + met à jour last_updated."""
     profile.setdefault("_meta", {})
     profile["_meta"]["last_updated"] = date.today().isoformat()
-    PROFILE_PATH.write_text(
+    profile_path().write_text(
         json.dumps(profile, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )

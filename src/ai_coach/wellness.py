@@ -12,16 +12,18 @@ from typing import Any
 
 import requests
 
-from ai_coach.config import DATA_DIR
+from pathlib import Path
+
+from ai_coach.config import athlete_path
 from ai_coach.intervals import IntervalsClient
 
 
 logger = logging.getLogger(__name__)
 
 
-WELLNESS_CACHE = DATA_DIR / "wellness.json"
-
-
+def wellness_cache_path() -> Path:
+    """Chemin du fichier wellness.json pour l'athlète courant."""
+    return athlete_path("wellness.json")
 def fetch_wellness(days: int = 14) -> list[dict]:
     """Fetch les données wellness des N derniers jours."""
     client = IntervalsClient()
@@ -37,7 +39,7 @@ def fetch_wellness(days: int = 14) -> list[dict]:
             return []
 
         # Sauvegarde en cache
-        WELLNESS_CACHE.write_text(
+        wellness_cache_path().write_text(
             json.dumps(data, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
@@ -49,9 +51,9 @@ def fetch_wellness(days: int = 14) -> list[dict]:
 
 def load_cached_wellness() -> list[dict]:
     """Charge le wellness depuis le cache local."""
-    if not WELLNESS_CACHE.exists():
+    if not wellness_cache_path().exists():
         return []
-    return json.loads(WELLNESS_CACHE.read_text(encoding="utf-8"))
+    return json.loads(wellness_cache_path().read_text(encoding="utf-8"))
 
 
 def build_wellness_summary(wellness_data: list[dict]) -> dict[str, Any]:

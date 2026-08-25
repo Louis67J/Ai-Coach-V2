@@ -14,15 +14,15 @@ from pathlib import Path
 
 import requests
 
-from ai_coach.config import DATA_DIR, load_config
+from ai_coach.config import athlete_path, load_config
 
 
 logger = logging.getLogger(__name__)
 
 
-ACTIVITIES_CACHE = DATA_DIR / "activities.json"
-
-
+def activities_cache_path() -> Path:
+    """Chemin du fichier activities.json pour l'athlète courant."""
+    return athlete_path("activities.json")
 class IntervalsClient:
     """Client minimal pour l'API Intervals.icu."""
 
@@ -91,37 +91,37 @@ def refresh_cache(
         "activities": activities,
     }
 
-    ACTIVITIES_CACHE.write_text(
+    activities_cache_path().write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    logger.info("Cache écrit: %s", ACTIVITIES_CACHE)
+    logger.info("Cache écrit: %s", activities_cache_path())
 
     return activities
 
 
 def load_cached_activities() -> list[dict]:
     """Charge les activités depuis le cache local. Renvoie [] si pas de cache."""
-    if not ACTIVITIES_CACHE.exists():
+    if not activities_cache_path().exists():
         return []
 
-    payload = json.loads(ACTIVITIES_CACHE.read_text(encoding="utf-8"))
+    payload = json.loads(activities_cache_path().read_text(encoding="utf-8"))
     return payload.get("activities", [])
 
 # --- Enrichissement des séances ---
 
-SESSIONS_CACHE = DATA_DIR / "sessions.json"
-
-
+def sessions_cache_path() -> Path:
+    """Chemin du fichier sessions.json pour l'athlète courant."""
+    return athlete_path("sessions.json")
 def _load_sessions_cache() -> dict[str, dict]:
     """Charge le cache de sessions enrichies. Clé = activity id."""
-    if not SESSIONS_CACHE.exists():
+    if not sessions_cache_path().exists():
         return {}
-    return json.loads(SESSIONS_CACHE.read_text(encoding="utf-8"))
+    return json.loads(sessions_cache_path().read_text(encoding="utf-8"))
 
 
 def _save_sessions_cache(cache: dict[str, dict]) -> None:
-    SESSIONS_CACHE.write_text(
+    sessions_cache_path().write_text(
         json.dumps(cache, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )

@@ -18,14 +18,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ai_coach.config import DATA_DIR
+from ai_coach.config import athlete_path
 
 
 logger = logging.getLogger(__name__)
 
 
-RAG_DIR = DATA_DIR / "rag"
-RAG_DIR.mkdir(exist_ok=True, parents=True)
+def rag_dir() -> Path:
+    """Dossier ChromaDB de l'athlète courant (créé à la demande)."""
+    path = athlete_path("rag")
+    path.mkdir(exist_ok=True, parents=True)
+    return path
 
 # Singleton pour éviter de recharger le modèle à chaque appel
 _embedding_model = None
@@ -49,7 +52,7 @@ def _get_collection():
     global _chroma_collection
     if _chroma_collection is None:
         import chromadb
-        client = chromadb.PersistentClient(path=str(RAG_DIR))
+        client = chromadb.PersistentClient(path=str(rag_dir()))
         _chroma_collection = client.get_or_create_collection(
             name="conversations",
             metadata={"description": "Échanges coach-athlète pour recherche sémantique"},
@@ -194,13 +197,14 @@ def index_all_from_memory() -> int:
     Indexe tous les échanges existants du fichier conversations.jsonl
     dans la base vectorielle. Utile pour la migration initiale.
     """
-    from ai_coach.memory import CONVERSATIONS_PATH
+    from ai_coach.memory import conversations_path
 
-    if not CONVERSATIONS_PATH.exists():
+    path = conversations_path()
+    if not path.exists():
         return 0
 
     count = 0
-    with CONVERSATIONS_PATH.open("r", encoding="utf-8") as f:
+    with path.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -226,5 +230,5 @@ def get_stats() -> dict[str, Any]:
     collection = _get_collection()
     return {
         "total_indexed": collection.count(),
-        "storage_path": str(RAG_DIR),
+        "storage_path": str(rag_dir()),
     }

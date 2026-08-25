@@ -8,12 +8,14 @@ import json
 from datetime import date, datetime
 from typing import Any
 
-from ai_coach.config import DATA_DIR
+from pathlib import Path
+
+from ai_coach.config import athlete_path
 
 
-PLANS_PATH = DATA_DIR / "plans.jsonl"
-
-
+def plans_path() -> Path:
+    """Chemin du fichier plans.jsonl pour l'athlète courant."""
+    return athlete_path("plans.jsonl")
 def save_plan(
     plan_text: str,
     start_date: str,
@@ -35,7 +37,7 @@ def save_plan(
         "structured": structured or {},
     }
 
-    with PLANS_PATH.open("a", encoding="utf-8") as f:
+    with plans_path().open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     return entry
@@ -122,11 +124,11 @@ def compute_plan_adherence(plan: dict, activities: list[dict]) -> dict[str, Any]
 
 def load_recent_plans(limit: int = 3) -> list[dict]:
     """Charge les N derniers plans."""
-    if not PLANS_PATH.exists():
+    if not plans_path().exists():
         return []
 
     plans = []
-    with PLANS_PATH.open("r", encoding="utf-8") as f:
+    with plans_path().open("r", encoding="utf-8") as f:
         for line in f:
             if line.strip():
                 try:
