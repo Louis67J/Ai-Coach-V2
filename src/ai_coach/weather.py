@@ -15,6 +15,40 @@ import requests
 logger = logging.getLogger(__name__)
 
 
+def geocode(name: str, count: int = 5) -> list[dict[str, Any]]:
+    """
+    Cherche des lieux par nom (Open-Meteo, gratuit et sans clé).
+
+    Évite de saisir des coordonnées à la main : l'athlète se déplace, et
+    retrouver une latitude à la virgule près pour chaque camp d'entraînement
+    est une source d'erreur silencieuse (la météo reste plausible mais fausse).
+    """
+    try:
+        response = requests.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": name, "count": count, "language": "fr"},
+            timeout=10,
+        )
+        response.raise_for_status()
+        results = response.json().get("results") or []
+    except Exception as e:
+        logger.warning("Géocodage indisponible pour %r: %s", name, e)
+        return []
+
+    return [
+        {
+            "name": r.get("name"),
+            "region": r.get("admin1"),
+            "country": r.get("country"),
+            "latitude": r.get("latitude"),
+            "longitude": r.get("longitude"),
+            "timezone": r.get("timezone"),
+        }
+        for r in results
+        if r.get("latitude") is not None and r.get("longitude") is not None
+    ]
+
+
 def fetch_forecast(
     latitude: float = 45.19,
     longitude: float = 5.72,
@@ -39,7 +73,9 @@ def fetch_forecast(
             "wind_gusts_10m_max",
             "weather_code",
         ]),
-        "timezone": "Europe/Paris",
+        # "auto" = fuseau déduit des coordonnées. En dur sur Europe/Paris, les
+        # journées étaient décalées dès qu'on sortait de ce fuseau.
+        "timezone": "auto",
         "forecast_days": 7,
     }
 

@@ -57,6 +57,35 @@ def update_field(path: list[str], value: Any) -> dict[str, Any]:
     return profile
 
 
+def resolve_location(profile: dict[str, Any]) -> dict[str, Any]:
+    """
+    Où se trouve l'athlète *maintenant*, pour la météo et le terrain.
+
+    `context.current_location` prend le pas sur `base_location` : un
+    déplacement change le climat et le relief, mais pas le domicile ni les
+    habitudes que le reste du profil décrit.
+    """
+    context = profile.get("context", {})
+    current = context.get("current_location") or {}
+
+    if current.get("latitude") is not None and current.get("longitude") is not None:
+        return {
+            "name": current.get("name") or "?",
+            "latitude": current["latitude"],
+            "longitude": current["longitude"],
+            "until": current.get("until"),
+            "is_away": True,
+        }
+
+    return {
+        "name": context.get("base_location", "Grenoble"),
+        "latitude": context.get("latitude", 45.19),
+        "longitude": context.get("longitude", 5.72),
+        "until": None,
+        "is_away": False,
+    }
+
+
 def format_profile_for_llm(profile: dict[str, Any]) -> str:
     """
     Construit une représentation texte du profil pour l'injecter dans
@@ -118,6 +147,18 @@ def format_profile_for_llm(profile: dict[str, Any]) -> str:
 
     lines.append("\n### Contexte de vie")
     lines.append(f"- Base : {context.get('base_location', '?')}")
+
+    # Un déplacement change le climat, le relief et les créneaux : le coach
+    # doit le savoir, sinon il prescrit la Chartreuse depuis l'Espagne.
+    location = resolve_location(profile)
+    if location["is_away"]:
+        away = f"- ⚠️ ACTUELLEMENT EN DÉPLACEMENT à {location['name']}"
+        if location.get("until"):
+            away += f" (jusqu'au {location['until']})"
+        lines.append(away)
+        lines.append(
+            "  → météo, terrain et parcours à raisonner sur ce lieu, pas sur la base habituelle"
+        )
     lines.append(
         f"- Profession : {context.get('profession', '?')} "
         f"({context.get('weekly_work_hours', '?')}h/sem)"

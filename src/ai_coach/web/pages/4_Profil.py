@@ -5,7 +5,13 @@ from datetime import date
 
 import streamlit as st
 
-from ai_coach.profile import ProfileNotFoundError, load_profile, update_field
+from ai_coach.profile import (
+    ProfileNotFoundError,
+    load_profile,
+    resolve_location,
+    update_field,
+)
+from ai_coach.weather import geocode
 
 st.set_page_config(page_title="AI Coach — Profil", page_icon="🧑", layout="wide")
 st.title("🧑 Profil athlète")
@@ -35,6 +41,59 @@ st.caption(
     f"({context.get('weekly_work_hours', '?')}h/sem) — "
     f"volume cible {context.get('weekly_training_hours_target', '?')}/sem"
 )
+
+st.divider()
+st.subheader("Où je suis")
+
+location = resolve_location(profile)
+if location["is_away"]:
+    msg = f"En déplacement à **{location['name']}**"
+    if location.get("until"):
+        msg += f" jusqu'au {location['until']}"
+    st.info(f"{msg} — météo et terrain raisonnés sur ce lieu.")
+else:
+    st.caption(f"À la base : **{location['name']}**")
+
+search = st.text_input(
+    "Changer de lieu",
+    placeholder="Nom de ville (ex: Sagunto, Grenoble, Girona)",
+    help="La météo du coach suit ce lieu. Laisse la base pour revenir chez toi.",
+)
+if search:
+    matches = geocode(search)
+    if not matches:
+        st.warning("Aucun lieu trouvé pour cette recherche.")
+    else:
+        labels = [
+            f"{m['name']} — {m.get('region') or '?'}, {m.get('country') or '?'}"
+            for m in matches
+        ]
+        choice = st.selectbox("Résultats", options=range(len(matches)), format_func=lambda i: labels[i])
+        picked = matches[choice]
+        until = st.date_input(
+            "Jusqu'au (optionnel)",
+            value=None,
+            help="Laisse vide si tu ne sais pas encore quand tu rentres.",
+        )
+        if st.button("📍 Définir comme lieu actuel"):
+            update_field(
+                ["context", "current_location"],
+                {
+                    "name": labels[choice],
+                    "latitude": picked["latitude"],
+                    "longitude": picked["longitude"],
+                    "timezone": picked.get("timezone"),
+                    "since": date.today().isoformat(),
+                    **({"until": until.isoformat()} if until else {}),
+                },
+            )
+            st.success(f"Lieu actuel : {labels[choice]}")
+            st.rerun()
+
+if location["is_away"] and st.button("🏠 Revenir à la base"):
+    update_field(["context", "current_location"], None)
+    st.success("Retour à la base.")
+    st.rerun()
 
 st.divider()
 st.subheader("Mise à jour rapide")

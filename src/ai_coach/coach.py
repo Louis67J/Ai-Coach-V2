@@ -409,10 +409,10 @@ def _tool_get_session_detail(input_data: dict) -> str:
 
 def _tool_get_weather() -> str:
     try:
-        profile = load_profile()
-        lat = profile.get("context", {}).get("latitude", 45.19)
-        lon = profile.get("context", {}).get("longitude", 5.72)
-        loc = profile.get("context", {}).get("base_location", "Grenoble")
+        from ai_coach.profile import resolve_location
+
+        location = resolve_location(load_profile())
+        lat, lon, loc = location["latitude"], location["longitude"], location["name"]
     except ProfileNotFoundError:
         lat, lon, loc = 45.19, 5.72, "Grenoble"
 
