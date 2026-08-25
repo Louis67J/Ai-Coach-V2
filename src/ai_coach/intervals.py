@@ -6,6 +6,7 @@ Gère l'authentification, le fetch des activités, et le cache local en JSON.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -55,18 +56,25 @@ class IntervalsClient:
         return activities
 
 
-def refresh_cache(days: int = 30) -> list[dict]:
+def refresh_cache(
+    days: int = 30,
+    start: date | None = None,
+    end: date | None = None,
+) -> list[dict]:
     """
-    Rafraîchit le cache local avec les activités des N derniers jours.
+    Rafraîchit le cache local avec les activités d'une période.
+
+    Par défaut : les N derniers jours. Passe start/end pour une plage
+    explicite (utile pour remonter plusieurs années d'historique).
 
     Écrit data/activities.json et renvoie la liste.
     """
     client = IntervalsClient()
 
-    end = date.today()
-    start = end - timedelta(days=days)
+    end = end or date.today()
+    start = start or (end - timedelta(days=days))
 
-    print(f"📡 Fetch Intervals.icu (derniers {days} jours)")
+    print(f"📡 Fetch Intervals.icu ({start.isoformat()} → {end.isoformat()})")
     activities = client.fetch_activities(start=start, end=end)
 
     # Ajoute un petit wrapper avec des métadonnées
@@ -748,7 +756,29 @@ def _should_fetch_streams(detail: dict) -> bool:
     return prelim_tag in _RECLASSIFY_CANDIDATE_TAGS
 
 
-def enrich_sessions(activities: list[dict], max_new: int = 20) -> list[dict]:
+def count_pending_enrichment(activities: list[dict]) -> int:
+    """Nombre d'activités qui seraient traitées par enrich_sessions (sans limite)."""
+    from ai_coach.analysis import is_usable
+
+    cache = _load_sessions_cache()
+    pending = 0
+    for act in activities:
+        if not is_usable(act):
+            continue
+        cached_entry = cache.get(act.get("id", ""))
+        if cached_entry is None:
+            pending += 1
+        elif not cached_entry.get("stream_checked") and cached_entry.get("tag") in _RECLASSIFY_CANDIDATE_TAGS:
+            pending += 1
+    return pending
+
+
+def enrich_sessions(
+    activities: list[dict],
+    max_new: int = 20,
+    progress_cb: Callable[[int, int, str], None] | None = None,
+    save_every: int = 25,
+) -> list[dict]:
     """
     Enrichit les activités exploitables en fetchant leurs détails.
     Utilise un cache pour ne pas re-fetcher ce qu'on a déjà.
@@ -761,7 +791,11 @@ def enrich_sessions(activities: list[dict], max_new: int = 20) -> list[dict]:
 
     Args:
         activities: liste brute des activités du cache principal
-        max_new: nombre max de nouvelles activités à traiter (rate limit)
+        max_new: nombre max d'activités à traiter en un appel (rate limit)
+        progress_cb: callback(traitées, total_prévu, nom) pour afficher une
+                     progression (utilisé par le dashboard sur les gros lots)
+        save_every: sauvegarde intermédiaire du cache tous les N traitements,
+                    pour ne rien perdre si un long batch est interrompu
 
     Returns:
         Liste des fiches de session enrichies (toutes, pas juste les nouvelles)
@@ -776,25 +810,25 @@ def enrich_sessions(activities: list[dict], max_new: int = 20) -> list[dict]:
         reverse=True,
     )
 
-    new_count = 0
-    reclassified_count = 0
+    todo = []
     for act in usable:
         act_id = act.get("id", "")
         cached_entry = cache.get(act_id)
-        is_reclassification = False
+        if cached_entry is None:
+            todo.append((act, False))
+        elif not cached_entry.get("stream_checked") and cached_entry.get("tag") in _RECLASSIFY_CANDIDATE_TAGS:
+            todo.append((act, True))
+    total = min(len(todo), max_new)
 
-        if cached_entry is not None:
-            if cached_entry.get("stream_checked") or cached_entry.get("tag") not in _RECLASSIFY_CANDIDATE_TAGS:
-                continue  # déjà bien classifié, ou déjà vérifié via stream
-            is_reclassification = True
-
-        if new_count >= max_new:
-            print(f"  ⏸️ Limite de {max_new} traitements atteinte. "
-                  f"Relance pour continuer.")
-            break
-
+    processed = 0
+    reclassified_count = 0
+    for act, is_reclassification in todo[:max_new]:
+        act_id = act.get("id", "")
         name = act.get("name", "?")[:40]
         print(f"  {'🔁 Reclassification' if is_reclassification else '🔍 Enrichissement'}: {name}...")
+        if progress_cb:
+            progress_cb(processed, total, name)
+
         detail = fetch_activity_detail(act_id)
         if detail:
             intervals_data = fetch_activity_intervals(act_id)
@@ -802,13 +836,21 @@ def enrich_sessions(activities: list[dict], max_new: int = 20) -> list[dict]:
             summary = build_session_summary(detail, intervals_data=intervals_data, streams=streams)
             summary["stream_checked"] = True
             cache[act_id] = summary
-            new_count += 1
+            processed += 1
             if is_reclassification:
                 reclassified_count += 1
+            if save_every and processed % save_every == 0:
+                _save_sessions_cache(cache)
+
+    if len(todo) > max_new:
+        print(f"  ⏸️ Limite de {max_new} traitements atteinte "
+              f"({len(todo) - max_new} restantes). Relance pour continuer.")
 
     _save_sessions_cache(cache)
+    if progress_cb:
+        progress_cb(processed, total, "terminé")
     print(f"  💾 Cache sessions: {len(cache)} fiches "
-          f"(+{new_count - reclassified_count} nouvelles, {reclassified_count} reclassifiées)")
+          f"(+{processed - reclassified_count} nouvelles, {reclassified_count} reclassifiées)")
 
     return list(cache.values())
 

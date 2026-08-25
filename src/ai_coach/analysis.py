@@ -255,9 +255,12 @@ def compute_durability_index(sessions: list[dict]) -> dict[str, Any]:
         if vi is not None:
             vi_values.append(float(vi))
 
+    # long_rides suit l'ordre de `sessions` (chronologique croissant côté
+    # build_report) : [0] = la plus ancienne, [-1] = la plus récente.
+    dates = sorted(r.get("date", "") for r in long_rides if r.get("date"))
     result: dict[str, Any] = {
         "count": len(long_rides),
-        "period": f"{long_rides[-1].get('date', '?')} → {long_rides[0].get('date', '?')}",
+        "period": f"{dates[0]} → {dates[-1]}" if dates else "?",
     }
 
     if decouplings:
@@ -331,39 +334,74 @@ def compute_ftp_trend(sessions: list[dict]) -> dict[str, Any]:
 
     data_points.sort(key=lambda x: x["date"])
 
-    recent_cutoff = (date.today() - timedelta(days=90)).isoformat()
-    recent = [d for d in data_points if d["date"] >= recent_cutoff]
-    older = [d for d in data_points if d["date"] < recent_cutoff]
+    # Comparaisons sur des fenêtres de MÊME durée. Comparer les 3 derniers
+    # mois à "tout le reste de l'historique" biaise mécaniquement le verdict :
+    # le meilleur de 400 séances bat toujours le meilleur de 20, ce qui
+    # faisait conclure à tort à une régression.
+    window = 90
+    today = date.today()
+
+    def _slice(days_ago_start: int, days_ago_end: int) -> list[dict]:
+        start = (today - timedelta(days=days_ago_start)).isoformat()
+        end = (today - timedelta(days=days_ago_end)).isoformat()
+        return [d for d in data_points if start <= d["date"] < end]
+
+    recent = _slice(window, 0)
+    previous = _slice(2 * window, window)
+    # Même fenêtre saisonnière un an plus tôt (la forme d'un cycliste est
+    # très saisonnière : comparer août à juin n'a pas de sens).
+    year_ago = _slice(365 + window, 365)
+
+    def _summarize(points: list[dict], k: int) -> dict[str, Any] | None:
+        if not points or k <= 0:
+            return None
+        top = sorted(points, key=lambda x: x["ftp_estimate"], reverse=True)[:k]
+        dates = sorted(d["date"] for d in points)
+        return {
+            "count": len(points),
+            "period": f"{dates[0]} → {dates[-1]}",
+            "avg_top": round(float(np.mean([d["ftp_estimate"] for d in top])), 0),
+            "best": [
+                {"date": d["date"], "ftp": d["ftp_estimate"], "source": d["source"], "name": d["name"]}
+                for d in top
+            ],
+        }
 
     result: dict[str, Any] = {
+        "window_days": window,
         "total_data_points": len(data_points),
-        "recent_3_months": len(recent),
-        "older": len(older),
     }
 
-    if recent:
-        recent_top = sorted(recent, key=lambda x: x["ftp_estimate"], reverse=True)[:5]
-        result["recent_best"] = [
-            {"date": d["date"], "ftp": d["ftp_estimate"], "source": d["source"], "name": d["name"]}
-            for d in recent_top
-        ]
-        result["recent_avg_top5"] = round(float(np.mean([d["ftp_estimate"] for d in recent_top])), 0)
+    MIN_POINTS = 3
+    if len(recent) < MIN_POINTS:
+        result["status"] = "insufficient_data"
+        result["note"] = f"Seulement {len(recent)} séance(s) exploitable(s) sur les {window} derniers jours."
+        return result
 
-    if older:
-        older_top = sorted(older, key=lambda x: x["ftp_estimate"], reverse=True)[:5]
-        result["older_avg_top5"] = round(float(np.mean([d["ftp_estimate"] for d in older_top])), 0)
+    # k identique des deux côtés pour que la comparaison soit honnête
+    for label, points in (("previous", previous), ("year_ago", year_ago)):
+        if len(points) < MIN_POINTS:
+            continue
+        k = min(5, len(recent), len(points))
+        recent_sum = _summarize(recent, k)
+        other_sum = _summarize(points, k)
+        result["recent"] = recent_sum
+        result[label] = other_sum
+        result["top_n_used"] = k
+        delta = recent_sum["avg_top"] - other_sum["avg_top"]
+        result[f"delta_vs_{label}"] = round(float(delta), 0)
 
-    if "recent_avg_top5" in result and "older_avg_top5" in result:
-        delta = result["recent_avg_top5"] - result["older_avg_top5"]
-        result["delta"] = round(float(delta), 0)
-        if delta > 5:
-            result["trend"] = "en progression ↗️"
-        elif delta < -5:
-            result["trend"] = "en régression ↘️"
-        else:
-            result["trend"] = "stable → (stagnation confirmée)"
-    elif recent:
-        result["trend"] = "pas assez d'historique ancien pour comparer"
+    result.setdefault("recent", _summarize(recent, min(5, len(recent))))
+
+    delta_prev = result.get("delta_vs_previous")
+    if delta_prev is None:
+        result["trend"] = "pas de fenêtre comparable de même durée"
+    elif delta_prev > 5:
+        result["trend"] = "en progression ↗️"
+    elif delta_prev < -5:
+        result["trend"] = "en régression ↘️"
+    else:
+        result["trend"] = "stable →"
 
     return result
 
@@ -437,6 +475,15 @@ def compute_power_profile(sessions: list[dict], weight_kg: float = 63.0) -> dict
                 "actual_duration_s": best_match,
                 "activity_id": data.get("activity_id"),
             }
+
+        # Provenance : à quelle séance correspond chaque record ? Sans ça le
+        # chiffre est invérifiable (impossible de le rapprocher d'une sortie).
+        sessions_by_id = {s.get("id"): s for s in (sessions or [])}
+        for entry in profile.values():
+            src = sessions_by_id.get(entry.get("activity_id"))
+            if src:
+                entry["date"] = src.get("date")
+                entry["activity_name"] = src.get("name")
 
         # Power models d'Intervals
         power_models = {}

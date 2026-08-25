@@ -352,15 +352,21 @@ def cmd_metrics() -> None:
     # Tendance FTP
     ftp = report.get("ftp_trend", {})
     if ftp and ftp.get("status") != "insufficient_data":
-        print("📉 Tendance FTP")
-        if "trend" in ftp:
-            print(f"   Tendance : {ftp['trend']}")
-        if "recent_avg_top5_np" in ftp:
-            print(f"   Top 5 NP récent  : {ftp['recent_avg_top5_np']}W")
-        if "older_avg_top5_np" in ftp:
-            print(f"   Top 5 NP ancien  : {ftp['older_avg_top5_np']}W")
-        if "np_delta" in ftp:
-            print(f"   Delta            : {'+' if ftp['np_delta'] > 0 else ''}{ftp['np_delta']}W")
+        window = ftp.get("window_days", 90)
+        print(f"📉 Tendance FTP (fenêtres de {window} jours)")
+        print(f"   Tendance : {ftp.get('trend', '?')}")
+        for key, label in (
+            ("recent", f"{window} derniers jours"),
+            ("previous", f"{window} jours précédents"),
+            ("year_ago", "Même période l'an dernier"),
+        ):
+            win = ftp.get(key)
+            if win:
+                print(f"   {label:28s} : {win['avg_top']:.0f}W  ({win['count']} séances, {win['period']})")
+        for key, label in (("delta_vs_previous", "vs période précédente"),
+                           ("delta_vs_year_ago", "vs l'an dernier")):
+            if ftp.get(key) is not None:
+                print(f"   Delta {label:22s} : {ftp[key]:+.0f}W")
         print()
 
     # Profil de puissance
@@ -369,7 +375,8 @@ def cmd_metrics() -> None:
         print(f"⚡ Profil de puissance ({pp.get('weight_kg_used', '?')}kg)")
         for duration, data in pp["profile"].items():
             bar = "█" * max(1, int(data["w_kg"] * 3))
-            print(f"   {duration:>5s} : {data['watts']:>4d}W = {data['w_kg']:.1f} W/kg  {bar}  ({data['level']})")
+            origin = f"  ← {data['date']}" if data.get("date") else ""
+            print(f"   {duration:>5s} : {data['watts']:>4d}W = {data['w_kg']:.1f} W/kg  {bar}  ({data['level']}){origin}")
         if pp.get("strengths"):
             print(f"   💪 Forces    : {', '.join(pp['strengths'])}")
         if pp.get("weaknesses"):

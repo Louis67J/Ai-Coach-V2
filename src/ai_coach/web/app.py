@@ -111,28 +111,89 @@ else:
 
     with tab_ftp:
         if ftp_trend and ftp_trend.get("status") != "insufficient_data":
-            if "trend" in ftp_trend:
-                st.write(f"**Tendance :** {ftp_trend['trend']}")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Top 5 NP récent", f"{ftp_trend.get('recent_avg_top5_np', '?')}W")
-            c2.metric("Top 5 NP ancien", f"{ftp_trend.get('older_avg_top5_np', '?')}W")
-            delta = ftp_trend.get("np_delta")
-            c3.metric("Delta", f"{delta:+d}W" if isinstance(delta, int) else "?")
+            window = ftp_trend.get("window_days", 90)
+            top_n = ftp_trend.get("top_n_used")
+            st.write(f"**Tendance :** {ftp_trend.get('trend', '?')}")
+            st.caption(
+                f"Comparaison sur des fenêtres de {window} jours de même durée"
+                + (f", moyenne des {top_n} meilleures estimations de chaque fenêtre." if top_n else ".")
+            )
+
+            cols = st.columns(3)
+            labels = [
+                ("recent", f"{window} derniers jours"),
+                ("previous", f"{window} jours précédents"),
+                ("year_ago", "Même période l'an dernier"),
+            ]
+            for col, (key, title) in zip(cols, labels):
+                win = ftp_trend.get(key)
+                if not win:
+                    col.metric(title, "—", help="Pas assez de données sur cette fenêtre")
+                    continue
+                # Le delta ne s'affiche que sur la fenêtre récente : c'est elle
+                # qu'on compare aux deux autres, pas l'inverse.
+                delta = ftp_trend.get("delta_vs_previous") if key == "recent" else None
+                col.metric(
+                    title,
+                    f"{win['avg_top']:.0f}W",
+                    f"{delta:+.0f}W vs période précédente" if delta is not None else None,
+                    help=f"{win['count']} séance(s) — {win['period']}",
+                )
+
+            delta_year = ftp_trend.get("delta_vs_year_ago")
+            if delta_year is not None:
+                st.caption(
+                    f"À la même période l'an dernier tu étais à "
+                    f"{ftp_trend['year_ago']['avg_top']:.0f}W, soit {delta_year:+.0f}W. "
+                    "La forme d'un cycliste étant saisonnière, c'est la comparaison "
+                    "la plus parlante des deux."
+                )
+
+            best = (ftp_trend.get("recent") or {}).get("best") or []
+            if best:
+                st.caption("Meilleures estimations récentes :")
+                st.dataframe(
+                    [
+                        {"Date": b["date"], "FTP est. (W)": b["ftp"], "Séance": b["name"], "Source": b["source"]}
+                        for b in best
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
         else:
-            st.caption("Pas assez de séances pour estimer une tendance FTP.")
+            note = (ftp_trend or {}).get("note")
+            st.caption(note or "Pas assez de séances pour estimer une tendance FTP.")
 
     with tab_power:
         if pp and pp.get("profile"):
-            st.caption(f"Poids utilisé : {pp.get('weight_kg_used', '?')}kg")
+            st.caption(
+                f"Poids utilisé : {pp.get('weight_kg_used', '?')}kg — "
+                f"période {pp.get('period', '?')} (fenêtre glissante Intervals.icu)"
+            )
+            rows = []
             for duration, data in pp["profile"].items():
-                st.write(
-                    f"**{duration}** : {data['watts']}W = {data['w_kg']:.1f} W/kg "
-                    f"({data['level']})"
+                act_id = data.get("activity_id")
+                rows.append(
+                    {
+                        "Durée": duration,
+                        "Puissance": f"{data['watts']}W",
+                        "W/kg": data["w_kg"],
+                        "Niveau": data["level"],
+                        "Date": data.get("date") or "—",
+                        "Séance": data.get("activity_name") or "—",
+                        "Lien": f"https://intervals.icu/activities/{act_id}" if act_id else None,
+                    }
                 )
-            if pp.get("strengths"):
-                st.success(f"💪 Forces : {', '.join(pp['strengths'])}")
-            if pp.get("weaknesses"):
-                st.warning(f"⚠️ Faiblesses : {', '.join(pp['weaknesses'])}")
+            st.dataframe(
+                rows,
+                use_container_width=True,
+                hide_index=True,
+                column_config={"Lien": st.column_config.LinkColumn("Vérifier", display_text="Intervals.icu")},
+            )
+            st.caption(
+                "Chaque record renvoie à la séance qui l'a produit — un chiffre qui "
+                "paraît faux vient souvent d'une perf hors de la fenêtre glissante."
+            )
             vo2 = pp.get("vo2max_estimated")
             if vo2:
                 st.metric("VO2max estimée", f"{vo2:.1f} ml/kg/min")
