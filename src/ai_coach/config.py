@@ -53,6 +53,16 @@ def configure_logging(level: int = logging.INFO) -> None:
     """
     logging.basicConfig(level=level, format="%(message)s")
 
+    # Les bibliothèques réseau et ML sont très bavardes en INFO (chaque requête
+    # HTTP, chaque fichier de modèle) : à ce niveau elles noient complètement
+    # les quelques lignes utiles de l'application.
+    for noisy in (
+        "httpx", "httpcore", "urllib3", "requests",
+        "huggingface_hub", "sentence_transformers", "transformers",
+        "chromadb", "anthropic",
+    ):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
 
 # --- Athlète courant ---------------------------------------------------
 #

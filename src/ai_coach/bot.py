@@ -11,7 +11,9 @@ Commandes disponibles:
 """
 from __future__ import annotations
 
+import datetime as dt
 import logging
+import os
 from pathlib import Path
 
 import discord
@@ -138,6 +140,10 @@ async def on_ready() -> None:
     if not auto_refresh.is_running():
         auto_refresh.start()
         log.info("🔄 Auto-refresh planifié (toutes les 4h)")
+
+    if not daily_brief.is_running():
+        daily_brief.start()
+        log.info("📬 Brief quotidien planifié à %02d:%02d", BRIEF_HOUR, BRIEF_MINUTE)
 
 
 @bot.command(name="followup")
@@ -923,6 +929,88 @@ async def auto_refresh():
 async def before_auto_refresh():
     """Attend que le bot soit prêt avant de commencer l'auto-refresh."""
     await bot.wait_until_ready()
+
+
+# --- Brief proactif ---------------------------------------------------
+#
+# Le reste de l'app attend qu'on vienne la consulter. Le brief est le seul
+# endroit où le coach prend l'initiative — d'où Discord plutôt que le
+# dashboard : c'est le canal qui arrive jusqu'au téléphone.
+
+BRIEF_HOUR = int(os.getenv("BRIEF_HOUR", "7"))
+BRIEF_MINUTE = int(os.getenv("BRIEF_MINUTE", "0"))
+
+
+async def _brief_channel() -> discord.abc.Messageable | None:
+    """Salon où poster le brief : DISCORD_CHANNEL_ID, sinon rien."""
+    config = load_config()
+    if not config.discord_channel_id:
+        return None
+    try:
+        channel_id = int(config.discord_channel_id)
+    except ValueError:
+        log.warning("DISCORD_CHANNEL_ID n'est pas un identifiant valide")
+        return None
+    return bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
+
+
+async def send_daily_brief(force: bool = False) -> bool:
+    """
+    Compose et poste le brief du jour. Renvoie True s'il a été envoyé.
+
+    `force` court-circuite la garde anti-doublon (commande manuelle).
+    """
+    import asyncio
+    import functools
+
+    from ai_coach.brief import build_daily_brief, mark_brief_sent, should_send
+
+    if not force and not should_send("daily"):
+        log.info("Brief du jour déjà envoyé, on passe")
+        return False
+
+    channel = await _brief_channel()
+    if channel is None:
+        log.warning("Aucun salon configuré pour le brief (DISCORD_CHANNEL_ID)")
+        return False
+
+    text = await asyncio.get_event_loop().run_in_executor(
+        None, functools.partial(build_daily_brief)
+    )
+
+    header = f"**Brief du {dt.date.today().strftime('%A %d %B')}**\n\n"
+    for chunk in _chunks(header + text):
+        await channel.send(chunk)
+
+    mark_brief_sent("daily")
+    log.info("Brief du jour envoyé")
+    return True
+
+
+@tasks.loop(time=dt.time(hour=BRIEF_HOUR, minute=BRIEF_MINUTE))
+async def daily_brief() -> None:
+    try:
+        await send_daily_brief()
+    except Exception:
+        log.exception("Échec du brief quotidien")
+
+
+@daily_brief.before_loop
+async def before_daily_brief():
+    await bot.wait_until_ready()
+
+
+@bot.command(name="brief")
+async def cmd_brief(ctx: commands.Context) -> None:
+    """Force l'envoi du brief du jour (sans attendre l'heure planifiée)."""
+    async with ctx.typing():
+        try:
+            sent = await send_daily_brief(force=True)
+        except Exception as e:
+            await ctx.send(f"❌ Erreur pendant le brief : {e}")
+            return
+    if not sent:
+        await ctx.send("⚠️ Aucun salon configuré pour le brief (DISCORD_CHANNEL_ID).")
 # --- Entry point ---
 
 def run_bot() -> None:
