@@ -28,7 +28,8 @@ def build_fitness_fig(
     # Barres TSS
     fig.add_trace(
         go.Bar(x=fitness_df.index, y=fitness_df["tss"],
-               name="TSS", marker_color="rgba(200,200,200,0.5)", width=86400000),
+               name="TSS", marker=dict(color="rgba(148,163,184,0.35)", line_width=0),
+               width=86400000),
         secondary_y=False,
     )
 
@@ -98,14 +99,22 @@ def build_fitness_fig(
                   opacity=0.2, secondary_y=True)
 
     fig.update_layout(
-        title="Forme & Fatigue (CTL / ATL / TSB)",
-        height=500,
+        title=dict(text="Forme & Fatigue (CTL / ATL / TSB)", font=dict(size=16)),
+        height=480,
         template="plotly_white",
         hovermode="x unified",
+        margin=dict(l=50, r=50, t=60, b=40),
+        plot_bgcolor="white",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    fig.update_yaxes(title_text="TSS", secondary_y=False)
-    fig.update_yaxes(title_text="CTL / ATL / TSB", secondary_y=True)
+    fig.update_xaxes(showgrid=False)
+    fig.update_yaxes(
+        title_text="TSS", secondary_y=False, showgrid=False, zeroline=False,
+    )
+    fig.update_yaxes(
+        title_text="CTL / ATL / TSB", secondary_y=True,
+        showgrid=True, gridcolor="rgba(0,0,0,0.06)", zeroline=False,
+    )
 
     return fig
 
@@ -179,6 +188,22 @@ def build_session_fig(
     ftp = session_summary.get("ftp_used", 310) if session_summary else 310
     fig.add_hline(y=ftp, line_dash="dash", line_color="red", opacity=0.4,
                   annotation_text=f"FTP {ftp}W", row=1, col=1)
+
+    # Surbrillance des efforts détectés via le stream (power bests), pour
+    # rendre visible ce que la détection basée sur les laps Intervals.icu rate
+    power_bests = (session_summary or {}).get("power_bests") or {}
+    for label, best in power_bests.items():
+        if best.get("pct_ftp", 0) < 90:
+            continue  # sous tempo, pas un "effort" à mettre en avant visuellement
+        start_min = best["start_s"] / 60
+        end_min = (best["start_s"] + best["duration_s"]) / 60
+        fig.add_vrect(
+            x0=start_min, x1=end_min,
+            fillcolor="rgba(255,0,0,0.08)", line_width=1, line_color="rgba(255,0,0,0.3)",
+            annotation_text=f"{label} @ {best['watts']}W", annotation_position="top left",
+            annotation_font_size=9,
+            row=1, col=1,
+        )
 
     # FC
     hr_clean = [h if h is not None else 0 for h in hr]

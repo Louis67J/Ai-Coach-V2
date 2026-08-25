@@ -173,6 +173,95 @@ def fetch_activity_streams(
         print(f"  ⚠️ Échec fetch streams {activity_id}: {e}")
         return None
 
+def _compute_stream_analysis(streams: dict[str, list], ftp: int) -> dict:
+    """
+    Analyse le flux de puissance brut : meilleures moyennes glissantes
+    (power bests) par durée standard, et zones estimées sur la séance entière.
+
+    Sert à compléter la classification basée uniquement sur les laps que
+    Intervals.icu détecte lui-même dans interval_summary, qui peut être trop
+    grossière (ex: un test max de 5min non isolé comme un lap séparé) ou
+    absente (icu_zone_times vide → fallback générique sur le type d'activité).
+    """
+    watts = streams.get("watts") or []
+    clean = [w if isinstance(w, (int, float)) else 0 for w in watts]
+    n = len(clean)
+    if n < 30 or not ftp:
+        return {"power_bests": {}, "zone_pct": {}}
+
+    import numpy as np
+    arr = np.array(clean, dtype=float)
+
+    durations_s = {"30s": 30, "1min": 60, "5min": 300, "10min": 600, "20min": 1200}
+    power_bests: dict[str, dict] = {}
+    for label, dur in durations_s.items():
+        if n < dur:
+            continue
+        window_avg = np.convolve(arr, np.ones(dur) / dur, mode="valid")
+        best_idx = int(np.argmax(window_avg))
+        best_watts = round(float(window_avg[best_idx]))
+        pct_ftp = round(best_watts / ftp * 100)
+        power_bests[label] = {
+            "watts": best_watts,
+            "pct_ftp": pct_ftp,
+            "zone": _zone_from_pct_ftp(pct_ftp),
+            "start_s": best_idx,  # streams Intervals.icu ~1 point/seconde
+            "duration_s": dur,
+        }
+
+    zone_secs: dict[str, int] = {}
+    for w in clean:
+        zone = _zone_from_pct_ftp(w / ftp * 100)
+        zone_secs[zone] = zone_secs.get(zone, 0) + 1
+    total = sum(zone_secs.values()) or 1
+    zone_pct = {z: round(100 * s / total) for z, s in zone_secs.items()}
+
+    return {"power_bests": power_bests, "zone_pct": zone_pct}
+
+
+def _stream_effort_override(stream_analysis: dict) -> tuple[str | None, str | None]:
+    """
+    Cherche, dans les power bests du stream, un effort assez significatif
+    pour mériter une classification propre — même quand la séance dans son
+    ensemble ressemble à une sortie endurance classique (cas du test de 5min
+    perdu au milieu d'une longue sortie Z1/Z2).
+
+    Retourne (tag, description) ou (None, None) si rien de significatif.
+    """
+    power_bests = stream_analysis.get("power_bests") or {}
+    if not power_bests:
+        return None, None
+
+    # %FTP minimum pour qu'un effort de cette durée soit jugé significatif
+    thresholds = {"30s": 150, "1min": 130, "5min": 105, "10min": 95, "20min": 88}
+    duration_rank = {"30s": 30, "1min": 60, "5min": 300, "10min": 600, "20min": 1200}
+    zone_rank = {"Z7": 7, "Z6": 6, "Z5": 5, "Z4": 4, "Z3": 3, "Z2": 2, "Z1": 1}
+
+    candidates = [
+        (label, best) for label, best in power_bests.items()
+        if best["pct_ftp"] >= thresholds.get(label, 999)
+    ]
+    if not candidates:
+        return None, None
+
+    # Priorise la zone la plus haute atteinte, puis la durée la plus longue
+    candidates.sort(
+        key=lambda c: (zone_rank.get(c[1]["zone"], 0), duration_rank.get(c[0], 0)),
+        reverse=True,
+    )
+    label, best = candidates[0]
+    zone = best["zone"]
+    if zone in ("Z5", "Z6", "Z7"):
+        tag = "VO2_PMA"
+    elif zone == "Z4":
+        tag = "SEUIL"
+    else:
+        tag = "TEMPO"
+
+    desc = f"Effort détecté (stream) : {label} @ {best['watts']}W ({zone}, {best['pct_ftp']}% FTP)"
+    return tag, desc
+
+
 def fetch_power_curves(sport_type: str = "Ride") -> dict | None:
     """
     Fetch la power curve de l'athlète depuis Intervals.icu.
@@ -194,6 +283,24 @@ def fetch_power_curves(sport_type: str = "Ride") -> dict | None:
         return None
 
 
+def _zone_from_pct_ftp(pct_ftp: float) -> str:
+    """Détermine la zone Coggan (Z1-Z7) à partir d'un %FTP."""
+    if pct_ftp < 56:
+        return "Z1"
+    elif pct_ftp < 76:
+        return "Z2"
+    elif pct_ftp < 91:
+        return "Z3"
+    elif pct_ftp < 106:
+        return "Z4"
+    elif pct_ftp < 120:
+        return "Z5"
+    elif pct_ftp < 150:
+        return "Z6"
+    else:
+        return "Z7"
+
+
 def _build_group_summaries(groups: list[dict], ftp: int = 310) -> list[dict]:
     """
     Transforme les icu_groups en résumés riches pour le coach.
@@ -203,22 +310,7 @@ def _build_group_summaries(groups: list[dict], ftp: int = 310) -> list[dict]:
     for g in groups:
         watts = g.get("average_watts") or 0
         pct_ftp = round(watts / ftp * 100) if ftp else 0
-
-        # Détermine la zone
-        if pct_ftp < 56:
-            zone = "Z1"
-        elif pct_ftp < 76:
-            zone = "Z2"
-        elif pct_ftp < 91:
-            zone = "Z3"
-        elif pct_ftp < 106:
-            zone = "Z4"
-        elif pct_ftp < 120:
-            zone = "Z5"
-        elif pct_ftp < 150:
-            zone = "Z6"
-        else:
-            zone = "Z7"
+        zone = _zone_from_pct_ftp(pct_ftp)
 
         count = g.get("count") or 1
         duration_s = g.get("moving_time") or g.get("elapsed_time") or 0
@@ -338,20 +430,7 @@ def _detect_interval_pattern(intervals: list[str], ftp: int | None = None) -> st
 
             # Zone approximative
             pct_ftp = watts / ftp * 100
-            if pct_ftp < 56:
-                zone = "Z1"
-            elif pct_ftp < 76:
-                zone = "Z2"
-            elif pct_ftp < 91:
-                zone = "Z3"
-            elif pct_ftp < 106:
-                zone = "Z4"
-            elif pct_ftp < 120:
-                zone = "Z5"
-            elif pct_ftp < 150:
-                zone = "Z6"
-            else:
-                zone = "Z7"
+            zone = _zone_from_pct_ftp(pct_ftp)
 
             parsed.append({
                 "count": count,
@@ -423,11 +502,43 @@ def _detect_interval_pattern(intervals: list[str], ftp: int | None = None) -> st
 
     return " | ".join(descriptions)
 
-def _classify_session(detail: dict) -> str:
+# Tags jugés "faibles" : soit un fallback générique (zone_times absent, cf
+# _classify_by_zones_and_laps), soit une classification par % de zones qui
+# peut cacher un effort ponctuel raté par les laps Intervals.icu. Utilisé à
+# la fois pour décider de fetcher le stream (enrich_sessions) et pour tenter
+# l'override par power-bests (_classify_session).
+_RECLASSIFY_CANDIDATE_TAGS = {
+    "RECUP", "Z2_STRICT", "ENDURANCE", "MIXTE_ENDURANCE", "MIXTE_INTENSIF",
+    "RIDE", "WORKOUT", "VIRTUALRIDE", "GRAVELRIDE", "INCONNU",
+}
+
+
+def _classify_session(detail: dict, stream_analysis: dict | None = None) -> tuple[str, str | None]:
     """
     Classifie la séance en un tag court basé sur les zones, l'intensité,
     ET la structure des intervalles détectés.
+
+    stream_analysis (optionnel, cf _compute_stream_analysis) sert à (1)
+    estimer les zones quand icu_zone_times est vide, et (2) détecter un
+    effort significatif que les laps Intervals.icu auraient raté.
+
+    Retourne (tag, stream_pattern) — stream_pattern est une description
+    textuelle de l'effort détecté via le stream, ou None si non applicable.
     """
+    tag = _classify_by_zones_and_laps(detail, stream_analysis=stream_analysis)
+
+    stream_pattern = None
+    if stream_analysis and tag in _RECLASSIFY_CANDIDATE_TAGS:
+        effort_tag, effort_desc = _stream_effort_override(stream_analysis)
+        if effort_tag:
+            tag = effort_tag
+            stream_pattern = effort_desc
+
+    return tag, stream_pattern
+
+
+def _classify_by_zones_and_laps(detail: dict, stream_analysis: dict | None = None) -> str:
+    """Logique de classification par zones + laps Intervals.icu (inchangée à part le fallback stream)."""
     # Activités non-vélo
     act_type = (detail.get("type") or "").lower()
     if act_type in ("run", "walk", "hike", "yoga", "weighttraining", "swim",
@@ -436,23 +547,29 @@ def _classify_session(detail: dict) -> str:
 
     zone_times = detail.get("icu_zone_times") or []
     if not zone_times:
-        return (detail.get("type") or "INCONNU").upper()
+        # icu_zone_times vide (cas fréquent ~20% des séances) : au lieu
+        # d'abandonner sur le type brut de l'activité, on estime les zones
+        # depuis le stream de puissance si on l'a.
+        if stream_analysis and stream_analysis.get("zone_pct"):
+            pct = stream_analysis["zone_pct"]
+        else:
+            return (detail.get("type") or "INCONNU").upper()
+    else:
+        # Parse les temps de zones
+        zones = {}
+        total = 0
+        for z in zone_times:
+            if isinstance(z, dict):
+                zid = z.get("id", "?")
+                secs = z.get("secs", 0)
+                if zid != "SS":
+                    zones[zid] = secs
+                    total += secs
 
-    # Parse les temps de zones
-    zones = {}
-    total = 0
-    for z in zone_times:
-        if isinstance(z, dict):
-            zid = z.get("id", "?")
-            secs = z.get("secs", 0)
-            if zid != "SS":
-                zones[zid] = secs
-                total += secs
+        if total == 0:
+            return "INCONNU"
 
-    if total == 0:
-        return "INCONNU"
-
-    pct = {z: 100 * s / total for z, s in zones.items()}
+        pct = {z: 100 * s / total for z, s in zones.items()}
 
     z1z2 = pct.get("Z1", 0) + pct.get("Z2", 0)
     z3 = pct.get("Z3", 0)
@@ -525,10 +642,14 @@ def _classify_session(detail: dict) -> str:
     else:
         return "ENDURANCE"
 
-def build_session_summary(detail: dict, intervals_data: dict | None = None) -> dict:
+def build_session_summary(
+    detail: dict,
+    intervals_data: dict | None = None,
+    streams: dict[str, list] | None = None,
+) -> dict:
     """
     Construit une fiche de séance enrichie à partir des détails API
-    et optionnellement des intervalles détaillés.
+    et optionnellement des intervalles détaillés et du stream de puissance.
     """
     # Intervalles résumés (format texte simple d'Intervals)
     intervals_raw = detail.get("interval_summary") or []
@@ -537,12 +658,17 @@ def build_session_summary(detail: dict, intervals_data: dict | None = None) -> d
     # Zones résumées
     zones_str = _format_zones_summary(detail.get("icu_zone_times"))
 
-    # Classification auto
-    tag = _classify_session(detail)
-
-    # Pattern d'intervalles
     ftp = detail.get("icu_ftp") or 310
-    interval_pattern = _detect_interval_pattern(intervals, ftp=ftp)
+
+    # Analyse du stream de puissance (si fourni) : power bests + zones estimées
+    stream_analysis = _compute_stream_analysis(streams, ftp) if streams else None
+    power_bests = (stream_analysis or {}).get("power_bests", {})
+
+    # Classification auto (peut être affinée par le stream)
+    tag, stream_pattern = _classify_session(detail, stream_analysis=stream_analysis)
+
+    # Pattern d'intervalles : priorité aux laps Intervals.icu, sinon le pattern détecté via stream
+    interval_pattern = _detect_interval_pattern(intervals, ftp=ftp) or stream_pattern
 
     # Sweet spot time
     ss_secs = 0
@@ -595,6 +721,9 @@ def build_session_summary(detail: dict, intervals_data: dict | None = None) -> d
         "intervals": intervals,
         "interval_pattern": interval_pattern,
 
+        # Meilleures puissances glissantes calculées depuis le stream (si disponible)
+        "power_bests": power_bests,
+
         # Intervalles détaillés (groupes avec FC, cadence, pente, etc.)
         "detailed_groups": detailed_groups,
 
@@ -606,14 +735,33 @@ def build_session_summary(detail: dict, intervals_data: dict | None = None) -> d
     }
     return summary
 
+def _should_fetch_streams(detail: dict) -> bool:
+    """
+    Décide si ça vaut le coup de fetcher le stream de puissance (appel HTTP
+    en plus, ~1 point/seconde) pour cette séance : seulement si icu_zone_times
+    est vide, ou si la classification sans stream tombe dans un tag faible
+    qui pourrait cacher un effort raté par les laps Intervals.icu.
+    """
+    if not detail.get("icu_zone_times"):
+        return True
+    prelim_tag, _ = _classify_session(detail)
+    return prelim_tag in _RECLASSIFY_CANDIDATE_TAGS
+
+
 def enrich_sessions(activities: list[dict], max_new: int = 20) -> list[dict]:
     """
     Enrichit les activités exploitables en fetchant leurs détails.
     Utilise un cache pour ne pas re-fetcher ce qu'on a déjà.
 
+    Retraite aussi, dans la limite de max_new, les séances déjà en cache
+    dont le tag est faible (fallback générique ou classification par zones
+    qui peut cacher un effort ponctuel) et qui n'ont pas encore été
+    vérifiées via le stream de puissance (`stream_checked`) — ça permet à un
+    simple refresh répété de corriger progressivement l'historique.
+
     Args:
         activities: liste brute des activités du cache principal
-        max_new: nombre max de nouvelles activités à fetcher (rate limit)
+        max_new: nombre max de nouvelles activités à traiter (rate limit)
 
     Returns:
         Liste des fiches de session enrichies (toutes, pas juste les nouvelles)
@@ -629,28 +777,38 @@ def enrich_sessions(activities: list[dict], max_new: int = 20) -> list[dict]:
     )
 
     new_count = 0
+    reclassified_count = 0
     for act in usable:
         act_id = act.get("id", "")
-        if act_id in cache:
-            continue  # déjà enrichi
+        cached_entry = cache.get(act_id)
+        is_reclassification = False
+
+        if cached_entry is not None:
+            if cached_entry.get("stream_checked") or cached_entry.get("tag") not in _RECLASSIFY_CANDIDATE_TAGS:
+                continue  # déjà bien classifié, ou déjà vérifié via stream
+            is_reclassification = True
+
         if new_count >= max_new:
-            print(f"  ⏸️ Limite de {max_new} nouveaux enrichissements atteinte. "
+            print(f"  ⏸️ Limite de {max_new} traitements atteinte. "
                   f"Relance pour continuer.")
             break
 
         name = act.get("name", "?")[:40]
-        print(f"  🔍 Enrichissement: {name}...")
+        print(f"  {'🔁 Reclassification' if is_reclassification else '🔍 Enrichissement'}: {name}...")
         detail = fetch_activity_detail(act_id)
         if detail:
-            # Fetch aussi les intervalles détaillés
             intervals_data = fetch_activity_intervals(act_id)
-            summary = build_session_summary(detail, intervals_data=intervals_data)
+            streams = fetch_activity_streams(act_id) if _should_fetch_streams(detail) else None
+            summary = build_session_summary(detail, intervals_data=intervals_data, streams=streams)
+            summary["stream_checked"] = True
             cache[act_id] = summary
             new_count += 1
+            if is_reclassification:
+                reclassified_count += 1
 
     _save_sessions_cache(cache)
     print(f"  💾 Cache sessions: {len(cache)} fiches "
-          f"(+{new_count} nouvelles)")
+          f"(+{new_count - reclassified_count} nouvelles, {reclassified_count} reclassifiées)")
 
     return list(cache.values())
 
