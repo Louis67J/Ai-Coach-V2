@@ -14,13 +14,12 @@ import pandas as pd
 from ai_coach.config import OUTPUTS_DIR
 
 
-def plot_fitness_interactive(
+def build_fitness_fig(
     fitness_df: pd.DataFrame,
     objectives: list[dict] | None = None,
     forecast: list[dict] | None = None,
-    filename: str = "fitness_interactive.html",
-) -> Path | None:
-    """Graphe CTL/ATL/TSB interactif avec Plotly."""
+) -> go.Figure | None:
+    """Construit la Figure Plotly CTL/ATL/TSB (sans l'écrire sur disque)."""
     if fitness_df.empty:
         return None
 
@@ -108,17 +107,30 @@ def plot_fitness_interactive(
     fig.update_yaxes(title_text="TSS", secondary_y=False)
     fig.update_yaxes(title_text="CTL / ATL / TSB", secondary_y=True)
 
+    return fig
+
+
+def plot_fitness_interactive(
+    fitness_df: pd.DataFrame,
+    objectives: list[dict] | None = None,
+    forecast: list[dict] | None = None,
+    filename: str = "fitness_interactive.html",
+) -> Path | None:
+    """Graphe CTL/ATL/TSB interactif avec Plotly, écrit en HTML pour le bot Discord."""
+    fig = build_fitness_fig(fitness_df, objectives=objectives, forecast=forecast)
+    if fig is None:
+        return None
+
     path = OUTPUTS_DIR / filename
     fig.write_html(str(path), include_plotlyjs="cdn")
     return path
 
 
-def plot_session_interactive(
+def build_session_fig(
     streams: dict[str, list],
     session_summary: dict | None = None,
-    filename: str | None = None,
-) -> Path | None:
-    """Graphe de séance interactif avec Plotly."""
+) -> go.Figure | None:
+    """Construit la Figure Plotly d'analyse de séance (sans l'écrire sur disque)."""
     time_s = streams.get("time", [])
     watts = streams.get("watts", [])
     hr = streams.get("heartrate", [])
@@ -208,6 +220,19 @@ def plot_session_interactive(
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
     fig.update_xaxes(title_text="Temps (minutes)", row=3, col=1)
+
+    return fig
+
+
+def plot_session_interactive(
+    streams: dict[str, list],
+    session_summary: dict | None = None,
+    filename: str | None = None,
+) -> Path | None:
+    """Graphe de séance interactif avec Plotly, écrit en HTML pour le bot Discord."""
+    fig = build_session_fig(streams, session_summary=session_summary)
+    if fig is None:
+        return None
 
     if not filename:
         date_str = session_summary.get("date", "unknown") if session_summary else "unknown"
