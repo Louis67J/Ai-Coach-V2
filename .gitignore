@@ -12,7 +12,10 @@ env/
 .env.local
 
 # Données et outputs (générés, pas versionnés)
-data/
+# Note: "data/*" (pas "data/") est nécessaire pour que les exceptions
+# ci-dessous marchent — Git ne descend jamais dans un dossier exclu via
+# un pattern de dossier ("data/"), donc les "!" suivants seraient ignorés.
+data/*
 !data/profile.json
 !data/sessions.json
 outputs/
