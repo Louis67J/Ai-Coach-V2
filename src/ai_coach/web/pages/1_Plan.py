@@ -56,6 +56,17 @@ else:
             f"{adherence['sessions_done']} / {adherence['sessions_missed']}",
         )
 
+        # La journée en cours est volontairement hors des totaux (sinon un plan
+        # généré le matin afficherait 0 % avant qu'on ait roulé), mais sans la
+        # montrer on croit que la séance du jour n'a pas été prise en compte.
+        today_row = next((d for d in adherence.get("days", []) if d.get("is_today")), None)
+        if today_row and (today_row["planned_tss"] or today_row["actual_tss"]):
+            st.caption(
+                f"**Aujourd'hui (journée en cours)** : {today_row['actual_tss']:.0f} TSS réalisés "
+                f"sur {today_row['planned_tss']:.0f} prescrits — pas encore comptés "
+                "dans l'adhérence ci-dessus, la journée n'est pas terminée."
+            )
+
         verdict = adherence.get("verdict")
         if verdict:
             if pct is None:
@@ -65,17 +76,29 @@ else:
 
         days = adherence.get("days", [])
         if days:
+            # Le prescrit s'estompe sur les jours à venir : sans ça, une colonne
+            # grise sans bleue à côté se lit comme une séance manquée alors
+            # qu'elle n'a simplement pas encore eu lieu.
+            planned_colors = [
+                "rgba(148,163,184,0.55)" if d["completed"] or d["is_today"]
+                else "rgba(148,163,184,0.22)"
+                for d in days
+            ]
+            actual_colors = ["#f2a154" if d["is_today"] else "#4c9be8" for d in days]
+
             fig = go.Figure()
             fig.add_trace(
                 go.Bar(
                     x=[d["date"] for d in days], y=[d["planned_tss"] for d in days],
-                    name="Prescrit", marker_color="rgba(148,163,184,0.55)",
+                    name="Prescrit", marker_color=planned_colors,
+                    hovertemplate="%{x}<br>Prescrit %{y:.0f} TSS<extra></extra>",
                 )
             )
             fig.add_trace(
                 go.Bar(
                     x=[d["date"] for d in days], y=[d["actual_tss"] for d in days],
-                    name="Réalisé", marker_color="#4c9be8",
+                    name="Réalisé", marker_color=actual_colors,
+                    hovertemplate="%{x}<br>Réalisé %{y:.0f} TSS<extra></extra>",
                 )
             )
             fig.update_layout(
@@ -86,6 +109,10 @@ else:
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             )
             st.plotly_chart(fig, width="stretch")
+            st.caption(
+                "Gris plein = jours révolus ou en cours, gris pâle = à venir. "
+                "La barre orange est la journée d'aujourd'hui."
+            )
 
     st.markdown(latest_plan["plan_text"])
 
