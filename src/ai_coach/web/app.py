@@ -55,7 +55,7 @@ fig = build_fitness_fig(
     plan_projection=plan_projection,
 )
 if fig is not None:
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
     if plan_projection:
         end = plan_projection[-1]
         st.caption(
@@ -124,7 +124,7 @@ if (zones and zones.get("status") != "insufficient_data") or (
                 yaxis=dict(showticklabels=False),
                 legend=dict(orientation="h", yanchor="top", y=-0.2),
             )
-            st.plotly_chart(fig_zones, use_container_width=True)
+            st.plotly_chart(fig_zones, width="stretch")
             st.caption(zones["comment"])
         else:
             st.caption("Pas assez de séances enrichies pour lire la répartition des intensités.")
@@ -162,7 +162,7 @@ if (zones and zones.get("status") != "insufficient_data") or (
                 yaxis=dict(title="heures", gridcolor="rgba(0,0,0,0.06)"),
                 xaxis=dict(showgrid=False),
             )
-            st.plotly_chart(fig_vol, use_container_width=True)
+            st.plotly_chart(fig_vol, width="stretch")
 
             verdict = volume.get("verdict")
             if verdict:
@@ -264,7 +264,7 @@ else:
                         {"Date": b["date"], "FTP est. (W)": b["ftp"], "Séance": b["name"], "Source": b["source"]}
                         for b in best
                     ],
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
         else:
@@ -293,7 +293,7 @@ else:
                 )
             st.dataframe(
                 rows,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={"Lien": st.column_config.LinkColumn("Vérifier", display_text="Intervals.icu")},
             )

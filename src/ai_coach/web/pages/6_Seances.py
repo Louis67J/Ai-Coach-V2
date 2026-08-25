@@ -47,7 +47,7 @@ st.caption(f"{len(filtered)} séance(s) — clique une ligne pour voir le détai
 event = st.dataframe(
     df,
     column_order=["Date", "Nom", "Tag", "TSS", "NP (W)", "Pattern détecté"],
-    use_container_width=True,
+    width="stretch",
     hide_index=True,
     on_select="rerun",
     selection_mode="single-row",
@@ -93,6 +93,6 @@ if st.button("📈 Charger le graphe détaillé"):
     else:
         fig = build_session_fig(streams, session_summary=target)
         if fig is not None:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         else:
             st.warning("Pas de données de puissance pour tracer le graphe.")

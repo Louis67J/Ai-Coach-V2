@@ -63,13 +63,13 @@ fig.update_layout(
     yaxis2=dict(title="Readiness (%)", overlaying="y", side="right"),
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
 )
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 if any(v is not None for v in rhr):
     fig_rhr = go.Figure()
     fig_rhr.add_trace(go.Scatter(x=dates, y=rhr, name="FC repos (bpm)", line=dict(color="#d62728")))
     fig_rhr.update_layout(height=300, template="plotly_white", hovermode="x unified")
-    st.plotly_chart(fig_rhr, use_container_width=True)
+    st.plotly_chart(fig_rhr, width="stretch")
 
 st.subheader("Détail 7 derniers jours")
 daily = summary.get("daily", [])
@@ -87,6 +87,6 @@ if daily:
             }
             for d in daily
         ],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
