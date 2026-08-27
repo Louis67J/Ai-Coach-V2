@@ -11,7 +11,13 @@ from ai_coach.plan_tracker import (
     compute_plan_adherence,
     load_recent_plans,
 )
-from ai_coach.web._shared import get_report_or_stop, invalidate_report_cache
+from ai_coach.charts_interactive import build_workout_fig
+from ai_coach.web._shared import (
+    get_profile_safe,
+    get_report_or_stop,
+    invalidate_report_cache,
+)
+from ai_coach.workout import workout_from_plan_day
 
 st.set_page_config(page_title="AI Coach — Plan", page_icon="📋", layout="wide")
 st.title("📋 Plan d'entraînement")
@@ -114,6 +120,33 @@ else:
                 "La barre orange est la journée d'aujourd'hui."
             )
 
+    # --- Profil des séances prescrites ---
+    plan_days = (latest_plan.get("structured") or {}).get("days") or []
+    if plan_days:
+        st.divider()
+        st.subheader("Forme des séances")
+        st.caption(
+            "Dessin déduit du texte du plan par un interpréteur — aucune "
+            "génération par le coach, donc rien d'inventé. Purement illustratif."
+        )
+
+        ftp = (get_profile_safe().get("athlete") or {}).get("ftp_watts")
+        for day in plan_days:
+            workout = workout_from_plan_day(day)
+            header = (
+                f"**{day.get('date')}** — {day.get('type', '?')} · "
+                f"{day.get('duration_min', 0)}min · {day.get('target_tss', 0)} TSS"
+            )
+            st.markdown(header)
+            st.caption(day.get("intensity") or "")
+
+            fig_workout = build_workout_fig(workout, ftp=ftp)
+            if fig_workout is not None:
+                st.plotly_chart(fig_workout, width="stretch")
+            for note in workout.notes:
+                st.caption(f"— {note}")
+
+    st.divider()
     st.markdown(latest_plan["plan_text"])
 
     with st.expander("Détail séances réalisées sur la période"):

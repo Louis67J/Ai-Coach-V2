@@ -167,6 +167,63 @@ def plot_fitness_interactive(
     return path
 
 
+_SEGMENT_COLORS = {
+    "warmup": "#a9b4c2",
+    "cooldown": "#a9b4c2",
+    "recovery": "#8fbce8",
+    "steady": "#4c9be8",
+    "work": "#f2a154",
+}
+
+
+def build_workout_fig(workout, ftp: int | None = None, height: int = 150):
+    """
+    Dessine le profil d'une séance prescrite : chaque segment est une barre
+    dont la largeur est sa durée et la hauteur son intensité.
+
+    Purement illustratif — la forme se lit d'un coup d'œil, là où
+    "2x8min tempo + 3x1min @ 90% FTP" demande un effort de lecture.
+    """
+    if not workout or not workout.segments:
+        return None
+
+    fig = go.Figure()
+    start = 0.0
+    for seg in workout.segments:
+        watts = f" ≈ {round(ftp * seg.pct_ftp / 100)}W" if ftp else ""
+        fig.add_trace(
+            go.Bar(
+                x=[seg.minutes],
+                y=[seg.pct_ftp],
+                base=0,
+                offset=0,
+                width=seg.minutes,
+                marker=dict(color=_SEGMENT_COLORS.get(seg.kind, "#4c9be8"), line_width=0),
+                showlegend=False,
+                hovertemplate=(
+                    f"{seg.label or seg.kind}<br>{seg.minutes:g} min "
+                    f"à {seg.pct_ftp:.0f}% FTP{watts}<extra></extra>"
+                ),
+            )
+        )
+        # La barre est centrée sur le milieu de son créneau temporel
+        fig.data[-1].x = [start + seg.minutes / 2]
+        start += seg.minutes
+
+    # Repère du seuil : au-dessus, l'effort n'est pas tenable longtemps
+    fig.add_hline(y=100, line_dash="dot", line_color="rgba(224,92,92,0.7)")
+
+    fig.update_layout(
+        height=height,
+        template="plotly_white",
+        bargap=0,
+        margin=dict(l=0, r=0, t=6, b=6),
+        xaxis=dict(title="minutes", showgrid=False, range=[0, start]),
+        yaxis=dict(title="% FTP", gridcolor="rgba(0,0,0,0.06)", rangemode="tozero"),
+    )
+    return fig
+
+
 def build_session_fig(
     streams: dict[str, list],
     session_summary: dict | None = None,
