@@ -815,9 +815,25 @@ def generate_plan(
     horizon_days: int = 10,
     source: str = "cli",
     metadata: dict[str, Any] | None = None,
+    instructions: str | None = None,
 ) -> str:
+    """
+    Génère un plan et l'enregistre pour le suivi d'adhérence.
+
+    `instructions` transmet les demandes ponctuelles de l'athlète (contrainte
+    de la semaine, déplacement, envie de travailler tel point). Sans ce
+    paramètre, adapter un plan supposait de le demander dans le chat — où
+    rien n'est enregistré, donc l'onglet Plan continuait d'afficher l'ancien.
+    """
     today = date.today()
     dates = [(today + timedelta(days=i)).isoformat() for i in range(horizon_days)]
+
+    demandes = (
+        f"\n\nDemandes explicites de l'athlète pour ce bloc, à respecter en priorité :\n"
+        f"{instructions.strip()}\n\n"
+        if instructions and instructions.strip()
+        else ""
+    )
 
     question = (
         f"Propose-moi un plan d'entraînement pour les {horizon_days} prochains jours "
@@ -829,6 +845,7 @@ def generate_plan(
         f"pas tenue). "
         f"Utilise aussi les outils pour consulter ma wellness, la météo, "
         f"et mes séances récentes si tu en as besoin. "
+        f"{demandes}"
         f"Pour chaque jour: type de séance, durée, intensité cible, et une phrase sur l'objectif. "
         f"Inclus 2-3 séances de renforcement musculaire. "
         f"Termine par 2-3 phrases sur la logique globale du bloc.\n\n"
@@ -897,6 +914,7 @@ async def generate_plan_async(
     horizon_days: int = 7,
     source: str = "discord",
     metadata: dict[str, Any] | None = None,
+    instructions: str | None = None,
 ) -> str:
     import asyncio
     import functools
@@ -910,5 +928,6 @@ async def generate_plan_async(
             horizon_days=horizon_days,
             source=source,
             metadata=metadata,
+            instructions=instructions,
         ),
     )

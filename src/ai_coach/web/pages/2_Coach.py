@@ -12,6 +12,13 @@ st.title("💬 Coach")
 
 report = get_report_or_stop()
 
+st.caption(
+    "Discussion libre : les réponses sont mémorisées, mais **un plan demandé ici "
+    "n'est pas enregistré** et n'apparaîtra pas dans l'onglet Plan. Pour un plan "
+    "suivi (adhérence, projection de forme), passe par **Plan → Générer le plan**, "
+    "où tu peux saisir tes consignes."
+)
+
 if "chat_history" not in st.session_state:
     # Amorce l'affichage avec les derniers échanges déjà en mémoire
     st.session_state.chat_history = [

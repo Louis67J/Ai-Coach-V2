@@ -126,10 +126,23 @@ st.caption(
     "et calibre le nouveau en conséquence."
 )
 horizon = st.slider("Horizon (jours)", min_value=3, max_value=21, value=7)
+instructions = st.text_area(
+    "Tes consignes pour ce bloc (optionnel)",
+    placeholder=(
+        "ex : je suis à Sagunto sans routine encore, "
+        "je veux tester mon 20min, pas dispo jeudi…"
+    ),
+    help=(
+        "C'est ici qu'il faut demander une adaptation. Un plan demandé dans "
+        "l'onglet Coach n'est pas enregistré et n'apparaîtra pas sur cette page."
+    ),
+)
 if st.button("🧠 Générer le plan", type="primary"):
     with st.spinner("Le coach réfléchit..."):
         try:
-            plan_text = generate_plan(report, horizon_days=horizon, source="web")
+            plan_text = generate_plan(
+                report, horizon_days=horizon, source="web", instructions=instructions,
+            )
         except Exception as e:
             st.error(f"Erreur : {e}")
         else:
