@@ -483,6 +483,69 @@ _LEVEL_SCORES = {
 _SHORT_DURATIONS = ("5s", "1min")
 _LONG_DURATIONS = ("20min", "60min")
 
+DURATION_SECONDS = {"5s": 5, "1min": 60, "5min": 300, "20min": 1200, "60min": 3600}
+
+
+def _median_cp_wprime(power_models: dict[str, Any] | None) -> tuple[float, float] | None:
+    """
+    CP et W' médians des modèles ajustés par Intervals.icu.
+
+    La médiane plutôt que la moyenne : les modèles divergent surtout sur W'
+    (de 13 à 24 kJ ici), et une valeur aberrante fausserait la référence.
+    """
+    if not power_models:
+        return None
+    cps = [m["cp"] for m in power_models.values() if m.get("cp")]
+    wps = [m["w_prime"] for m in power_models.values() if m.get("w_prime")]
+    if not cps or not wps:
+        return None
+    return float(np.median(cps)), float(np.median(wps))
+
+
+def detect_untested_durations(
+    profile: dict[str, Any],
+    power_models: dict[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    """
+    Repère les durées dont le record n'est visiblement pas un effort maximal.
+
+    Un athlète dont les sorties all-out font 45-50 minutes n'a aucune fenêtre
+    de 60 minutes à pleine intensité : son "meilleur 60min" décrit alors une
+    sortie tranquille, pas sa capacité. Sans ce filtre, on lit une lacune
+    physiologique là où il n'y a qu'une absence de test — et on prescrit un
+    bloc correctif inutile.
+
+    Le modèle de puissance critique donne la référence : P(t) = CP + W'/t.
+    """
+    cp_wp = _median_cp_wprime(power_models)
+    if not cp_wp:
+        return {}
+    cp, w_prime = cp_wp
+
+    # Seuil volontairement large : le modèle CP surestime les longues durées
+    # (dérive cardiaque, glycogène), donc seul un écart net est concluant.
+    RATIO_THRESHOLD = 0.93
+
+    untested: dict[str, dict[str, Any]] = {}
+    for duration, data in profile.items():
+        seconds = DURATION_SECONDS.get(duration)
+        watts = data.get("watts")
+        # Sous 5 minutes, la performance dépend surtout de l'anaérobie et le
+        # modèle n'est pas une référence fiable.
+        if not seconds or seconds < 300 or not watts:
+            continue
+
+        predicted = cp + w_prime / seconds
+        ratio = watts / predicted
+        if ratio < RATIO_THRESHOLD:
+            untested[duration] = {
+                "observed_watts": watts,
+                "predicted_watts": round(predicted),
+                "ratio": round(ratio, 3),
+                "gap_pct": round(100 * (ratio - 1), 1),
+            }
+    return untested
+
 
 def coggan_score(duration: str, w_kg: float) -> float | None:
     """
@@ -524,14 +587,25 @@ def compute_rider_shape(power_profile: dict[str, Any]) -> dict[str, Any]:
     aller chercher.
     """
     profile = (power_profile or {}).get("profile") or {}
+
+    # Une durée jamais poussée à fond décrirait une lacune inexistante :
+    # on la met de côté pour la lecture, sans la cacher.
+    untested = detect_untested_durations(profile, (power_profile or {}).get("power_models"))
+
     scores: dict[str, float] = {}
     for duration, data in profile.items():
+        if duration in untested:
+            continue
         score = coggan_score(duration, data.get("w_kg") or 0)
         if score is not None:
             scores[duration] = score
 
     if len(scores) < 3:
-        return {"status": "insufficient_data", "durations": len(scores)}
+        return {
+            "status": "insufficient_data",
+            "durations": len(scores),
+            "untested": untested,
+        }
 
     mean_score = sum(scores.values()) / len(scores)
 
@@ -560,7 +634,19 @@ def compute_rider_shape(power_profile: dict[str, Any]) -> dict[str, Any]:
         comment = "Tu tiens mieux la durée que l'explosivité ; les efforts courts sont le gisement."
     else:
         archetype = "polyvalent"
-        comment = "Aucune orientation marquée : le profil est équilibré sur la durée."
+        comment = "Aucune orientation marquée : le profil est équilibré sur les durées mesurées."
+
+    # Annoncer un profil équilibré alors qu'un bout de la courbe n'a jamais
+    # été mesuré serait trompeur : on dit ce qui manque pour conclure.
+    missing_long = [d for d in _LONG_DURATIONS if d in untested]
+    missing_short = [d for d in _SHORT_DURATIONS if d in untested]
+    if missing_long or missing_short:
+        archetype += " (lecture partielle)"
+        missing = ", ".join(missing_long + missing_short)
+        comment += (
+            f" Attention : {missing} n'a pas été poussé à fond, l'orientation ne peut "
+            "pas être tranchée tant que cette durée n'est pas testée."
+        )
 
     # Fraîcheur des records : une durée qu'on ne teste jamais paraît faible
     # alors qu'elle est simplement non mesurée. Sans ce garde-fou on
@@ -582,6 +668,12 @@ def compute_rider_shape(power_profile: dict[str, Any]) -> dict[str, Any]:
         for d in weaknesses
         if age_days.get(d, 0) > STALE_DAYS
     ]
+    for duration, info in untested.items():
+        caveats.append(
+            f"{duration} : écarté de la lecture — {info['observed_watts']}W observés contre "
+            f"~{info['predicted_watts']}W attendus d'après ton CP ({info['gap_pct']}%), "
+            "signe d'une durée jamais poussée à fond plutôt que d'une lacune"
+        )
 
     return {
         "scores": scores,
@@ -593,6 +685,7 @@ def compute_rider_shape(power_profile: dict[str, Any]) -> dict[str, Any]:
         "relative_strengths": strengths,
         "relative_weaknesses": weaknesses,
         "age_days": age_days,
+        "untested": untested,
         "caveats": caveats,
     }
 

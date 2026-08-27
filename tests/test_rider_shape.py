@@ -122,3 +122,78 @@ def test_creux_sur_record_recent_nest_pas_signale():
 def test_absence_de_date_ne_plante_pas():
     shape = compute_rider_shape(_profile(**{"5s": 17.0, "1min": 8.0, "5min": 5.5, "20min": 5.0, "60min": 4.6}))
     assert shape["caveats"] == []
+
+
+# --- Durées non testées (modèle de puissance critique) ---
+
+_MODELS = {"MS_2P": {"cp": 296.0, "w_prime": 16200.0}}
+
+
+def _profile_with_models(watts: dict[str, int]) -> dict:
+    """power_profile avec watts explicites et modèles CP/W'."""
+    return {
+        "profile": {
+            d: {"watts": w, "w_kg": w / 63, "level": "?"} for d, w in watts.items()
+        },
+        "power_models": _MODELS,
+    }
+
+
+def test_effort_60min_non_maximal_est_detecte():
+    """
+    Cas réel : les sorties all-out de l'athlète durent moins d'une heure,
+    donc aucune fenêtre de 60min n'existe à pleine intensité. Le "meilleur
+    60min" décrit une sortie tranquille, pas une capacité.
+    """
+    from ai_coach.analysis import detect_untested_durations
+
+    profile = _profile_with_models({"5min": 359, "20min": 309, "60min": 260})["profile"]
+    untested = detect_untested_durations(profile, _MODELS)
+    assert "60min" in untested
+    assert untested["60min"]["gap_pct"] < -10
+
+
+def test_effort_20min_maximal_nest_pas_ecarte():
+    """Le 20min colle à la prédiction du modèle : c'est un vrai test."""
+    from ai_coach.analysis import detect_untested_durations
+
+    profile = _profile_with_models({"5min": 359, "20min": 309, "60min": 260})["profile"]
+    assert "20min" not in detect_untested_durations(profile, _MODELS)
+
+
+def test_durees_courtes_jamais_ecartees():
+    """Sous 5min l'anaérobie domine : le modèle CP n'y est pas une référence."""
+    from ai_coach.analysis import detect_untested_durations
+
+    profile = _profile_with_models({"5s": 100, "1min": 100, "20min": 309})["profile"]
+    untested = detect_untested_durations(profile, _MODELS)
+    assert "5s" not in untested and "1min" not in untested
+
+
+def test_sans_modele_aucune_duree_ecartee():
+    from ai_coach.analysis import detect_untested_durations
+
+    profile = _profile_with_models({"60min": 100})["profile"]
+    assert detect_untested_durations(profile, None) == {}
+
+
+def test_duree_non_testee_exclue_de_la_forme():
+    """
+    Sans exclusion, un 60min non testé faisait conclure à tort à un profil
+    explosif avec l'endurance comme point faible.
+    """
+    shape = compute_rider_shape(_profile_with_models(
+        {"5s": 1055, "1min": 542, "5min": 359, "20min": 309, "60min": 260}
+    ))
+    assert "60min" not in shape["scores"]
+    assert "60min" in shape["untested"]
+    assert "60min" not in shape["relative_weaknesses"]
+
+
+def test_lecture_partielle_est_annoncee():
+    """Annoncer un profil équilibré sans avoir mesuré la longue durée serait faux."""
+    shape = compute_rider_shape(_profile_with_models(
+        {"5s": 1055, "1min": 542, "5min": 359, "20min": 309, "60min": 260}
+    ))
+    assert "lecture partielle" in shape["archetype"]
+    assert "60min" in shape["comment"]

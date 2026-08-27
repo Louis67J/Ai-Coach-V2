@@ -320,6 +320,26 @@ else:
                 for caveat in shape.get("caveats", []):
                     st.info(f"ℹ️ {caveat}")
 
+                untested = shape.get("untested") or {}
+                if untested:
+                    st.caption(
+                        "Durées écartées de la lecture (record nettement sous ce que "
+                        "ton modèle de puissance critique prédit — donc non maximal) :"
+                    )
+                    st.dataframe(
+                        [
+                            {
+                                "Durée": d,
+                                "Observé": f"{info['observed_watts']}W",
+                                "Attendu (CP)": f"{info['predicted_watts']}W",
+                                "Écart": f"{info['gap_pct']}%",
+                            }
+                            for d, info in untested.items()
+                        ],
+                        width="stretch",
+                        hide_index=True,
+                    )
+
                 st.caption(
                     f"Niveau moyen sur l'échelle Coggan : {shape['mean_score']}/100. "
                     "Les barres montrent l'écart de chaque durée à ce niveau — "
