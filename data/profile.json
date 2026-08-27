@@ -196,6 +196,13 @@
       "type": "performance metric",
       "priority": "B",
       "notes": "objectif chiffré, +15W vs niveau actuel (stagnation à 310W depuis 3 ans à casser)"
+    },
+    {
+      "priority": "B",
+      "name": "Cyclocross espagne 1",
+      "date": "2026-10-17",
+      "type": "course",
+      "notes": "Début de la saison cyclocross"
     }
   ]
 }
