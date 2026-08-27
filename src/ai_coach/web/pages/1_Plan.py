@@ -143,7 +143,11 @@ else:
 
             fig_workout = build_workout_fig(workout, ftp=ftp)
             if fig_workout is not None:
-                st.plotly_chart(fig_workout, width="stretch")
+                # Sans ça la barre d'outils Plotly recouvre le graphe au survol,
+                # qui est trop bas pour l'accueillir.
+                st.plotly_chart(
+                    fig_workout, width="stretch", config={"displayModeBar": False}
+                )
             for note in workout.notes:
                 st.caption(f"— {note}")
 

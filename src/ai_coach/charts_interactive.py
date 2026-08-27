@@ -191,13 +191,14 @@ def build_workout_fig(workout, ftp: int | None = None, height: int = 150):
     start = 0.0
     for seg in workout.segments:
         watts = f" ≈ {round(ftp * seg.pct_ftp / 100)}W" if ftp else ""
+        # offset=0 ancre le bord GAUCHE de la barre sur x : les blocs
+        # s'enchaînent alors bout à bout, sans trou ni chevauchement.
         fig.add_trace(
             go.Bar(
-                x=[seg.minutes],
+                x=[start],
                 y=[seg.pct_ftp],
-                base=0,
-                offset=0,
                 width=seg.minutes,
+                offset=0,
                 marker=dict(color=_SEGMENT_COLORS.get(seg.kind, "#4c9be8"), line_width=0),
                 showlegend=False,
                 hovertemplate=(
@@ -206,20 +207,29 @@ def build_workout_fig(workout, ftp: int | None = None, height: int = 150):
                 ),
             )
         )
-        # La barre est centrée sur le milieu de son créneau temporel
-        fig.data[-1].x = [start + seg.minutes / 2]
         start += seg.minutes
 
     # Repère du seuil : au-dessus, l'effort n'est pas tenable longtemps
-    fig.add_hline(y=100, line_dash="dot", line_color="rgba(224,92,92,0.7)")
+    fig.add_hline(
+        y=100, line_dash="dot", line_color="rgba(224,92,92,0.8)",
+        annotation_text="FTP", annotation_position="right",
+        annotation_font_size=10,
+    )
 
+    peak = max(seg.pct_ftp for seg in workout.segments)
     fig.update_layout(
         height=height,
         template="plotly_white",
         bargap=0,
         margin=dict(l=0, r=0, t=6, b=6),
-        xaxis=dict(title="minutes", showgrid=False, range=[0, start]),
-        yaxis=dict(title="% FTP", gridcolor="rgba(0,0,0,0.06)", rangemode="tozero"),
+        xaxis=dict(title="minutes", showgrid=False, range=[0, start], zeroline=False),
+        # On garde toujours la ligne FTP dans le cadre, même sur une séance facile
+        yaxis=dict(
+            title="% FTP",
+            gridcolor="rgba(0,0,0,0.06)",
+            range=[0, max(peak, 100) * 1.15],
+            zeroline=False,
+        ),
     )
     return fig
 
