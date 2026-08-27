@@ -274,6 +274,59 @@ else:
 
     with tab_power:
         if pp and pp.get("profile"):
+            shape = report.get("rider_shape", {})
+            if shape and shape.get("status") != "insufficient_data":
+                st.markdown(f"**Profil : {shape['archetype']}**")
+                st.caption(shape["comment"])
+
+                # L'écart au niveau moyen de l'athlète est ce qui oriente
+                # l'entraînement ; le niveau absolu ne le fait pas.
+                deltas = shape["deltas"]
+                order = list(pp["profile"].keys())
+                fig_shape = go.Figure()
+                fig_shape.add_trace(
+                    go.Bar(
+                        x=order,
+                        y=[deltas.get(d, 0) for d in order],
+                        marker_color=[
+                            "#e05c5c" if deltas.get(d, 0) <= -6
+                            else "#4c9be8" if deltas.get(d, 0) >= 6
+                            else "rgba(148,163,184,0.55)"
+                            for d in order
+                        ],
+                        hovertemplate="%{x}<br>%{y:+.1f} pts vs ton niveau moyen<extra></extra>",
+                    )
+                )
+                fig_shape.add_hline(y=0, line_color="rgba(0,0,0,0.35)")
+                fig_shape.update_layout(
+                    height=230, template="plotly_white", showlegend=False,
+                    margin=dict(l=0, r=0, t=10, b=10),
+                    yaxis=dict(title="écart à ton niveau moyen", gridcolor="rgba(0,0,0,0.06)"),
+                    xaxis=dict(showgrid=False),
+                )
+                st.plotly_chart(fig_shape, width="stretch")
+
+                c_str, c_weak = st.columns(2)
+                strengths = shape.get("relative_strengths") or []
+                weaknesses = shape.get("relative_weaknesses") or []
+                c_str.success(
+                    f"💪 Point fort relatif : {', '.join(strengths)}" if strengths
+                    else "Aucune durée ne se détache nettement."
+                )
+                c_weak.warning(
+                    f"⚠️ Gisement de progression : {', '.join(weaknesses)}" if weaknesses
+                    else "Aucun creux marqué."
+                )
+                for caveat in shape.get("caveats", []):
+                    st.info(f"ℹ️ {caveat}")
+
+                st.caption(
+                    f"Niveau moyen sur l'échelle Coggan : {shape['mean_score']}/100. "
+                    "Les barres montrent l'écart de chaque durée à ce niveau — "
+                    "c'est là que se situe le gain, pas dans le classement absolu."
+                )
+                st.divider()
+
             st.caption(
                 f"Poids utilisé : {pp.get('weight_kg_used', '?')}kg — "
                 f"période {pp.get('period', '?')} (fenêtre glissante Intervals.icu)"

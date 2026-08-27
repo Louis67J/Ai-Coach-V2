@@ -377,10 +377,21 @@ def cmd_metrics() -> None:
             bar = "█" * max(1, int(data["w_kg"] * 3))
             origin = f"  ← {data['date']}" if data.get("date") else ""
             print(f"   {duration:>5s} : {data['watts']:>4d}W = {data['w_kg']:.1f} W/kg  {bar}  ({data['level']}){origin}")
-        if pp.get("strengths"):
-            print(f"   💪 Forces    : {', '.join(pp['strengths'])}")
-        if pp.get("weaknesses"):
-            print(f"   ⚠️  Faiblesses : {', '.join(pp['weaknesses'])}")
+        # Lecture relative : le classement absolu met souvent toutes les
+        # durées au même niveau et n'aide pas à choisir quoi travailler.
+        shape = report.get("rider_shape", {})
+        if shape and shape.get("status") != "insufficient_data":
+            print(f"\n   🚴 Profil : {shape['archetype']}")
+            print(f"      {shape['comment']}")
+            print(f"      Écart de chaque durée à ton niveau moyen ({shape['mean_score']}/100) :")
+            for duration in pp["profile"]:
+                delta = shape["deltas"].get(duration)
+                if delta is None:
+                    continue
+                marker = "💪" if delta >= 6 else ("⚠️ " if delta <= -6 else "  ")
+                print(f"        {marker} {duration:>5s} : {delta:+5.1f}")
+            for caveat in shape.get("caveats", []):
+                print(f"      ℹ️  {caveat}")
 
     models = pp.get("power_models", {})
     if models:

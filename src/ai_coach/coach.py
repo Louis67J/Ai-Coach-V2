@@ -196,7 +196,13 @@ TOOLS = [
         "description": (
             "Récupère le profil de puissance complet de l'athlète : meilleurs watts "
             "sur 5s/1min/5min/20min/60min, niveaux Coggan, modèles de puissance "
-            "(CP, W', FTP estimée), VO2max estimée. Données sur 1 an."
+            "(CP, W', FTP estimée), VO2max estimée. Données sur 1 an. "
+            "Contient aussi `rider_shape` : l'orientation du coureur et l'écart de "
+            "chaque durée à son propre niveau moyen (`deltas`), avec ses points forts "
+            "et gisements relatifs. C'est cette lecture relative qui doit orienter tes "
+            "recommandations — les niveaux absolus classent souvent l'athlète au même "
+            "rang partout et ne disent rien. Vérifie `caveats` : un creux fondé sur un "
+            "record ancien peut être un manque de test plutôt qu'une vraie lacune."
         ),
         "input_schema": {
             "type": "object",
@@ -487,6 +493,19 @@ def _tool_get_power_profile() -> str:
             }
         result["power_models"] = models
         result["vo2max_5min"] = curve.get("vo2max_5m")
+
+        # Forme du profil : où l'athlète est fort ou faible *par rapport à
+        # lui-même*. Les niveaux absolus le classent "Excellent" partout et
+        # n'orientent donc aucune décision d'entraînement.
+        try:
+            from ai_coach.analysis import compute_power_profile, compute_rider_shape
+            from ai_coach.intervals import load_enriched_sessions as _load_sessions
+
+            shape = compute_rider_shape(compute_power_profile(_load_sessions()))
+            if shape.get("status") != "insufficient_data":
+                result["rider_shape"] = shape
+        except Exception as e:
+            logger.warning("Lecture du profil de coureur indisponible: %s", e)
 
         return json.dumps(result, ensure_ascii=False)
 

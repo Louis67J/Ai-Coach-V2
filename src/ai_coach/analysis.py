@@ -453,6 +453,150 @@ def compute_ftp_trend(sessions: list[dict]) -> dict[str, Any]:
 
     return result
 
+# Barème Coggan : W/kg minimum pour chaque niveau, par durée.
+COGGAN_LEVELS: dict[str, list[tuple[float, str]]] = {
+    "5s": [(23.0, "World Class"), (20.0, "Exceptionnel"), (17.0, "Excellent"),
+           (14.0, "Très bon"), (11.0, "Bon"), (8.0, "Moyen")],
+    "1min": [(11.0, "World Class"), (9.5, "Exceptionnel"), (8.0, "Excellent"),
+             (6.5, "Très bon"), (5.5, "Bon"), (4.5, "Moyen")],
+    "5min": [(7.5, "World Class"), (6.5, "Exceptionnel"), (5.5, "Excellent"),
+             (4.8, "Très bon"), (4.0, "Bon"), (3.5, "Moyen")],
+    "20min": [(6.4, "World Class"), (5.6, "Exceptionnel"), (5.0, "Excellent"),
+              (4.3, "Très bon"), (3.7, "Bon"), (3.2, "Moyen")],
+    "60min": [(6.0, "World Class"), (5.2, "Exceptionnel"), (4.6, "Excellent"),
+              (4.0, "Très bon"), (3.4, "Bon"), (2.9, "Moyen")],
+}
+
+# Position de chaque palier sur une échelle continue 0-100, pour pouvoir
+# comparer des durées entre elles : "Excellent" en 5s et "Excellent" en 20min
+# ne recouvrent pas les mêmes W/kg, mais bien le même niveau relatif.
+_LEVEL_SCORES = {
+    "World Class": 100.0,
+    "Exceptionnel": 85.0,
+    "Excellent": 70.0,
+    "Très bon": 55.0,
+    "Bon": 40.0,
+    "Moyen": 25.0,
+}
+
+# Durées courtes vs longues, pour lire l'orientation du coureur
+_SHORT_DURATIONS = ("5s", "1min")
+_LONG_DURATIONS = ("20min", "60min")
+
+
+def coggan_score(duration: str, w_kg: float) -> float | None:
+    """
+    Traduit un W/kg en score 0-100 sur l'échelle Coggan de cette durée.
+
+    Le niveau nommé seul ne dit rien d'exploitable : un athlète peut être
+    "Excellent" partout et avoir malgré tout un point faible net. Le score
+    continu permet de comparer ses propres durées entre elles.
+    """
+    anchors = COGGAN_LEVELS.get(duration)
+    if not anchors or not w_kg:
+        return None
+
+    # anchors est trié du plus haut niveau au plus bas
+    if w_kg >= anchors[0][0]:
+        return 100.0
+
+    for i, (threshold, label) in enumerate(anchors):
+        if w_kg >= threshold:
+            upper_thr, upper_label = anchors[i - 1]
+            lower_thr, lower_label = threshold, label
+            span = upper_thr - lower_thr
+            ratio = (w_kg - lower_thr) / span if span else 0
+            low, high = _LEVEL_SCORES[lower_label], _LEVEL_SCORES[upper_label]
+            return round(low + ratio * (high - low), 1)
+
+    # Sous le dernier palier : on descend linéairement vers 0
+    lowest_thr, lowest_label = anchors[-1]
+    return round(max(0.0, _LEVEL_SCORES[lowest_label] * w_kg / lowest_thr), 1)
+
+
+def compute_rider_shape(power_profile: dict[str, Any]) -> dict[str, Any]:
+    """
+    Lit la *forme* du profil de puissance plutôt que son niveau absolu.
+
+    Un classement "Excellent" sur quatre durées sur cinq n'oriente aucun
+    entraînement. Ce qui est actionnable, c'est l'écart d'une durée par
+    rapport au propre niveau de l'athlète : c'est là qu'il y a du gain à
+    aller chercher.
+    """
+    profile = (power_profile or {}).get("profile") or {}
+    scores: dict[str, float] = {}
+    for duration, data in profile.items():
+        score = coggan_score(duration, data.get("w_kg") or 0)
+        if score is not None:
+            scores[duration] = score
+
+    if len(scores) < 3:
+        return {"status": "insufficient_data", "durations": len(scores)}
+
+    mean_score = sum(scores.values()) / len(scores)
+
+    # Écart de chaque durée au niveau moyen de l'athlète
+    deltas = {d: round(s - mean_score, 1) for d, s in scores.items()}
+    RELATIVE_GAP = 6.0
+    strengths = sorted(
+        [d for d, gap in deltas.items() if gap >= RELATIVE_GAP],
+        key=lambda d: deltas[d], reverse=True,
+    )
+    weaknesses = sorted([d for d, gap in deltas.items() if gap <= -RELATIVE_GAP], key=lambda d: deltas[d])
+
+    short = [scores[d] for d in _SHORT_DURATIONS if d in scores]
+    long = [scores[d] for d in _LONG_DURATIONS if d in scores]
+    orientation_delta = None
+    if short and long:
+        orientation_delta = round(sum(short) / len(short) - sum(long) / len(long), 1)
+
+    if orientation_delta is None:
+        archetype, comment = "indéterminé", "Pas assez de durées pour situer l'orientation."
+    elif orientation_delta >= 8:
+        archetype = "explosif (sprinteur / puncheur)"
+        comment = "Tes qualités sont sur les efforts courts ; l'endurance de puissance est le gisement."
+    elif orientation_delta <= -8:
+        archetype = "rouleur / grimpeur"
+        comment = "Tu tiens mieux la durée que l'explosivité ; les efforts courts sont le gisement."
+    else:
+        archetype = "polyvalent"
+        comment = "Aucune orientation marquée : le profil est équilibré sur la durée."
+
+    # Fraîcheur des records : une durée qu'on ne teste jamais paraît faible
+    # alors qu'elle est simplement non mesurée. Sans ce garde-fou on
+    # prescrirait un travail correctif pour une lacune inexistante.
+    STALE_DAYS = 120
+    today = date.today()
+    age_days: dict[str, int] = {}
+    for duration, data in profile.items():
+        raw_date = data.get("date")
+        if not raw_date:
+            continue
+        try:
+            age_days[duration] = (today - date.fromisoformat(raw_date)).days
+        except (ValueError, TypeError):
+            continue
+
+    caveats = [
+        f"{d} : record datant de {age_days[d]} jours — à retester avant d'en tirer une conclusion"
+        for d in weaknesses
+        if age_days.get(d, 0) > STALE_DAYS
+    ]
+
+    return {
+        "scores": scores,
+        "mean_score": round(mean_score, 1),
+        "deltas": deltas,
+        "archetype": archetype,
+        "comment": comment,
+        "orientation_delta": orientation_delta,
+        "relative_strengths": strengths,
+        "relative_weaknesses": weaknesses,
+        "age_days": age_days,
+        "caveats": caveats,
+    }
+
+
 def compute_power_profile(sessions: list[dict], weight_kg: float = 63.0) -> dict[str, Any]:
     """
     Profil de puissance depuis l'API Intervals.icu (power curves réelles).
@@ -460,18 +604,7 @@ def compute_power_profile(sessions: list[dict], weight_kg: float = 63.0) -> dict
     """
     from ai_coach.intervals import fetch_power_curves
 
-    coggan_levels = {
-        "5s": [(23.0, "World Class"), (20.0, "Exceptionnel"), (17.0, "Excellent"),
-               (14.0, "Très bon"), (11.0, "Bon"), (8.0, "Moyen")],
-        "1min": [(11.0, "World Class"), (9.5, "Exceptionnel"), (8.0, "Excellent"),
-                 (6.5, "Très bon"), (5.5, "Bon"), (4.5, "Moyen")],
-        "5min": [(7.5, "World Class"), (6.5, "Exceptionnel"), (5.5, "Excellent"),
-                 (4.8, "Très bon"), (4.0, "Bon"), (3.5, "Moyen")],
-        "20min": [(6.4, "World Class"), (5.6, "Exceptionnel"), (5.0, "Excellent"),
-                  (4.3, "Très bon"), (3.7, "Bon"), (3.2, "Moyen")],
-        "60min": [(6.0, "World Class"), (5.2, "Exceptionnel"), (4.6, "Excellent"),
-                  (4.0, "Très bon"), (3.4, "Bon"), (2.9, "Moyen")],
-    }
+    coggan_levels = COGGAN_LEVELS
 
     # Durées cibles en secondes
     targets = {
@@ -573,18 +706,7 @@ def compute_power_profile(sessions: list[dict], weight_kg: float = 63.0) -> dict
 
 def _compute_power_profile_from_sessions(sessions: list[dict], weight_kg: float = 63.0) -> dict[str, Any]:
     """Fallback : calcul du profil depuis les sessions enrichies (méthode d'avant)."""
-    coggan_levels = {
-        "5s": [(23.0, "World Class"), (20.0, "Exceptionnel"), (17.0, "Excellent"),
-               (14.0, "Très bon"), (11.0, "Bon"), (8.0, "Moyen")],
-        "1min": [(11.0, "World Class"), (9.5, "Exceptionnel"), (8.0, "Excellent"),
-                 (6.5, "Très bon"), (5.5, "Bon"), (4.5, "Moyen")],
-        "5min": [(7.5, "World Class"), (6.5, "Exceptionnel"), (5.5, "Excellent"),
-                 (4.8, "Très bon"), (4.0, "Bon"), (3.5, "Moyen")],
-        "20min": [(6.4, "World Class"), (5.6, "Exceptionnel"), (5.0, "Excellent"),
-                  (4.3, "Très bon"), (3.7, "Bon"), (3.2, "Moyen")],
-        "60min": [(6.0, "World Class"), (5.2, "Exceptionnel"), (4.6, "Excellent"),
-                  (4.0, "Très bon"), (3.4, "Bon"), (2.9, "Moyen")],
-    }
+    coggan_levels = COGGAN_LEVELS
 
     best = {"5s": 0, "1min": 0, "5min": 0, "20min": 0, "60min": 0}
 
@@ -983,8 +1105,10 @@ def build_report(activities: list[dict]) -> dict[str, Any]:
             # 4. Tendance FTP
             report["ftp_trend"] = compute_ftp_trend(enriched_chrono)
 
-            # 5. Profil de puissance
+            # 5. Profil de puissance + lecture de sa forme (points forts et
+            #    faibles relatifs, là où le niveau absolu ne dit rien)
             report["power_profile"] = compute_power_profile(enriched_chrono, weight_kg=weight)
+            report["rider_shape"] = compute_rider_shape(report["power_profile"])
 
             # 6. Méthode d'entraînement : répartition des zones (polarisé /
             #    pyramidal / seuil) et volume réalisé vs objectif du profil
