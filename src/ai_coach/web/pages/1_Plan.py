@@ -12,6 +12,7 @@ from ai_coach.plan_tracker import (
     load_recent_plans,
 )
 from ai_coach.charts_interactive import build_workout_fig
+from ai_coach.intervals_sync import push_plan_to_calendar
 from ai_coach.web._shared import (
     get_profile_safe,
     get_report_or_stop,
@@ -145,6 +146,65 @@ else:
                 st.plotly_chart(fig_workout, width="stretch")
             for note in workout.notes:
                 st.caption(f"— {note}")
+
+        # --- Export vers Intervals.icu ---
+        st.divider()
+        st.subheader("Envoyer vers Intervals.icu")
+        st.caption(
+            "Crée les séances dans ton calendrier Intervals.icu. "
+            "Les jours de repos et les séances hors vélo ne sont pas envoyés, "
+            "et une date qui porte déjà une séance planifiée n'est jamais écrasée."
+        )
+
+        if not ftp:
+            st.warning("FTP absente du profil : impossible de convertir les intensités en watts.")
+        elif st.button("👁️ Prévisualiser l'envoi"):
+            with st.spinner("Lecture de ton calendrier..."):
+                try:
+                    st.session_state.push_preview = push_plan_to_calendar(
+                        latest_plan, ftp=ftp, dry_run=True
+                    )
+                except Exception as e:
+                    st.error(f"Impossible de lire le calendrier Intervals.icu : {e}")
+
+        preview = st.session_state.get("push_preview")
+        if preview:
+            to_create = preview["to_create"]
+            if preview["skipped_existing"]:
+                st.info(
+                    "Déjà planifié sur Intervals.icu, laissé intact : "
+                    + ", ".join(preview["skipped_existing"])
+                )
+            if preview["skipped_rest_or_off_bike"]:
+                st.caption(
+                    f"{preview['skipped_rest_or_off_bike']} jour(s) non envoyé(s) "
+                    "(repos ou séance hors vélo)."
+                )
+
+            if not to_create:
+                st.success("Rien à créer : tout est déjà en place.")
+            else:
+                st.write(f"**{len(to_create)} séance(s) seraient créées :**")
+                for payload in to_create:
+                    with st.expander(
+                        f"{payload['start_date_local'][:10]} — {payload['name']} "
+                        f"({payload['moving_time'] // 60}min, TSS {payload['icu_training_load']})"
+                    ):
+                        st.code(payload["description"], language="text")
+
+                st.warning(
+                    "Cette action écrit dans ton calendrier Intervals.icu. "
+                    "Relis la liste ci-dessus avant de confirmer."
+                )
+                if st.button("✅ Confirmer l'envoi", type="primary"):
+                    with st.spinner("Envoi..."):
+                        result = push_plan_to_calendar(latest_plan, ftp=ftp, dry_run=False)
+                    if result["created"]:
+                        st.success(f"{len(result['created'])} séance(s) créées : "
+                                   + ", ".join(result["created"]))
+                    for err in result["errors"]:
+                        st.error(f"{err['date']} : {err['error']}")
+                    st.session_state.pop("push_preview", None)
 
     st.divider()
     st.markdown(latest_plan["plan_text"])
