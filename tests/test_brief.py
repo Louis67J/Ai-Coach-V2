@@ -58,3 +58,33 @@ def test_etat_corrompu_ne_bloque_pas_le_brief():
 
 def test_last_brief_date_sans_etat():
     assert brief.last_brief_date("daily") is None
+
+
+# --- Rattrapage au démarrage ---
+
+def test_rattrapage_si_heure_passee_et_aucun_brief():
+    """Démarrer le bot à 10h ne doit pas faire attendre le lendemain."""
+    from datetime import datetime
+
+    assert brief.missed_today(7, 0, now=datetime(2026, 8, 28, 10, 30)) is True
+
+
+def test_pas_de_rattrapage_avant_l_heure():
+    """Avant l'heure prévue, c'est à la boucle planifiée de s'en charger."""
+    from datetime import datetime
+
+    assert brief.missed_today(7, 0, now=datetime(2026, 8, 28, 6, 59)) is False
+
+
+def test_pas_de_rattrapage_si_deja_envoye():
+    """Un redémarrage en milieu de journée ne doit pas renvoyer le brief."""
+    from datetime import datetime
+
+    brief.mark_brief_sent("daily", day="2026-08-28")
+    assert brief.missed_today(7, 0, now=datetime(2026, 8, 28, 10, 30)) is False
+
+
+def test_rattrapage_a_l_heure_pile():
+    from datetime import datetime
+
+    assert brief.missed_today(7, 0, now=datetime(2026, 8, 28, 7, 0)) is True

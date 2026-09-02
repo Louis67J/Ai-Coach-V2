@@ -1000,6 +1000,20 @@ async def daily_brief() -> None:
 async def before_daily_brief():
     await bot.wait_until_ready()
 
+    # La boucle ne se déclenche qu'à l'heure dite : démarrer le bot à 10h
+    # ferait attendre le lendemain. Si l'heure est passée et qu'aucun brief
+    # n'est parti aujourd'hui, on l'envoie maintenant — en retard vaut
+    # nettement mieux que sauté.
+    from ai_coach.brief import missed_today
+
+    try:
+        if missed_today(BRIEF_HOUR, BRIEF_MINUTE):
+            log.info("Brief du jour manqué (démarrage après %02d:%02d) — envoi immédiat",
+                     BRIEF_HOUR, BRIEF_MINUTE)
+            await send_daily_brief()
+    except Exception:
+        log.exception("Échec du rattrapage du brief")
+
 
 @bot.command(name="brief")
 async def cmd_brief(ctx: commands.Context) -> None:

@@ -59,6 +59,28 @@ def should_send(kind: str = "daily", today: str | None = None) -> bool:
     return last_brief_date(kind) != today
 
 
+def missed_today(
+    scheduled_hour: int,
+    scheduled_minute: int = 0,
+    now: Any = None,
+    kind: str = "daily",
+) -> bool:
+    """
+    Le brief du jour a-t-il été manqué ?
+
+    Une planification à heure fixe suppose une machine allumée à cette
+    heure-là. Sur un portable, la machine démarre souvent après : sans
+    rattrapage, le brief saute la journée entière au lieu d'arriver en
+    retard, ce qui est bien plus utile que rien.
+    """
+    from datetime import datetime, time as dt_time
+
+    now = now or datetime.now()
+    if now.time() < dt_time(scheduled_hour, scheduled_minute):
+        return False  # l'heure n'est pas encore venue : la boucle s'en chargera
+    return should_send(kind, today=now.date().isoformat())
+
+
 DAILY_QUESTION = (
     "Fais-moi le brief du jour, en 6 lignes maximum. "
     "Commence par la séance que tu me recommandes aujourd'hui (type, durée, intensité), "
