@@ -132,7 +132,7 @@ else:
         )
 
         ftp = (get_profile_safe().get("athlete") or {}).get("ftp_watts")
-        for day in plan_days:
+        for index, day in enumerate(plan_days):
             workout = workout_from_plan_day(day)
             header = (
                 f"**{day.get('date')}** — {day.get('type', '?')} · "
@@ -143,10 +143,16 @@ else:
 
             fig_workout = build_workout_fig(workout, ftp=ftp)
             if fig_workout is not None:
-                # Sans ça la barre d'outils Plotly recouvre le graphe au survol,
-                # qui est trop bas pour l'accueillir.
+                # `key` explicite : deux journées de même durée et même intensité
+                # produisent un graphe identique, et Streamlit refuse alors deux
+                # éléments au même identifiant auto-généré — ce qui interrompait
+                # le rendu de la page au milieu du plan.
+                # displayModeBar : la barre d'outils recouvre ces graphes bas.
                 st.plotly_chart(
-                    fig_workout, width="stretch", config={"displayModeBar": False}
+                    fig_workout,
+                    width="stretch",
+                    config={"displayModeBar": False},
+                    key=f"workout_{index}_{day.get('date')}",
                 )
             for note in workout.notes:
                 st.caption(f"— {note}")

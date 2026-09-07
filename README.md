@@ -19,7 +19,10 @@ Les secrets restent locaux : `.env` n'est jamais commité.
 
 ## Au quotidien
 
-Active d'abord le venv dans chaque nouveau terminal :
+Le plus rapide : double-cliquer sur **`start-web.bat`** (dashboard) ou
+**`start-bot.bat`** (bot Discord). Ils activent le venv et lancent tout seuls.
+
+En ligne de commande, active d'abord le venv dans chaque nouveau terminal :
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
