@@ -40,7 +40,7 @@ from ai_coach.rag import index_exchange as rag_index, search_similar, format_rag
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
+DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
 
 
 # ============================================================

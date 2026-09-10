@@ -15,10 +15,15 @@ from ai_coach.config import athlete_path
 def tracker_path() -> Path:
     """Chemin du fichier token_usage.jsonl pour l'athlète courant."""
     return athlete_path("token_usage.jsonl")
-# Tarifs Claude Sonnet 4.5 ($/million tokens) — à jour avril 2026
+# Tarifs ($/million tokens). Ces valeurs sont figées ici : le coût affiché
+# est donc une estimation locale, pas une facture. En cas de doute sur le
+# montant réel, la console Anthropic fait foi.
 PRICING = {
+    "claude-sonnet-5": {"input": 2.0, "output": 10.0},
     "claude-sonnet-4-5": {"input": 3.0, "output": 15.0},
     "claude-sonnet-4-5-20250929": {"input": 3.0, "output": 15.0},
+    "claude-opus-5": {"input": 5.0, "output": 25.0},
+    "claude-haiku-4-5": {"input": 1.0, "output": 5.0},
     "claude-haiku-3-5": {"input": 0.80, "output": 4.0},
 }
 DEFAULT_PRICING = {"input": 3.0, "output": 15.0}

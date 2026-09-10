@@ -253,7 +253,7 @@ def summarize_old_exchanges(
 
     config = load_config()
     client = Anthropic(api_key=config.anthropic_api_key)
-    model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
+    model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
 
     response = client.messages.create(
         model=model,
