@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from ai_coach.coach import generate_plan
+from ai_coach.config import to_local_display
 from ai_coach.intervals import load_cached_activities, load_enriched_sessions
 from ai_coach.plan_tracker import (
     build_plan_vs_actual,
@@ -33,7 +34,7 @@ if not latest_plan:
 else:
     st.subheader("Dernier plan généré")
     st.caption(
-        f"Généré le {latest_plan['timestamp'][:10]} — "
+        f"Généré le {to_local_display(latest_plan['timestamp'], '%d/%m/%Y à %H:%M')} — "
         f"{latest_plan['days']} jours à partir du {latest_plan['start_date']}"
     )
 

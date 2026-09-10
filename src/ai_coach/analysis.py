@@ -10,10 +10,12 @@ Fonctions principales :
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any
 
 import pandas as pd
+
+from ai_coach.config import utc_now_iso
 
 
 # --- Filtrage ---
@@ -1136,7 +1138,7 @@ def build_report(activities: list[dict]) -> dict[str, Any]:
     recent_daily = build_recent_daily_log(activities, days=14)
 
     report = {
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": utc_now_iso(),
         "today": date.today().isoformat(),
         "today_weekday": ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"][date.today().weekday()],
         "period": {

@@ -5,11 +5,11 @@ Stocke chaque appel dans un fichier JSONL pour historique.
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from typing import Any
 
-from ai_coach.config import athlete_path
+from ai_coach.config import athlete_path, utc_now_iso
 
 
 def tracker_path() -> Path:
@@ -54,7 +54,7 @@ def log_usage(
     cost_total = cost_input + cost_output + cost_cache_write + cost_cache_read
 
     entry = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": utc_now_iso(),
         "date": date.today().isoformat(),
         "model": model,
         "input_tokens": input_tokens,

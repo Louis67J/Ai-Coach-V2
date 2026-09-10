@@ -5,12 +5,12 @@ Stocke les sensations post-séance pour enrichir le coaching.
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import date
 from typing import Any
 
 from pathlib import Path
 
-from ai_coach.config import athlete_path
+from ai_coach.config import athlete_path, utc_now_iso
 
 
 def journal_path() -> Path:
@@ -32,7 +32,7 @@ def add_entry(
         tags: mots-clés optionnels (fatigue, douleur, motivation, etc.)
     """
     entry = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": utc_now_iso(),
         "activity_date": activity_date or date.today().isoformat(),
         "rpe": rpe,
         "notes": notes,

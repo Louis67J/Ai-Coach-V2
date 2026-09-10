@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -104,6 +105,40 @@ def athlete_data_dir(athlete: str | None = None) -> Path:
 def athlete_path(filename: str, athlete: str | None = None) -> Path:
     """Chemin d'un fichier de données pour l'athlète courant."""
     return athlete_data_dir(athlete) / filename
+
+
+# Horodatage : on écrit en UTC, on affiche en heure locale.
+#
+# Les fichiers de données survivent ainsi aux déplacements de l'athlète — Louis
+# est passé de la France à Sagunto sans que l'historique ne bouge — et deux
+# machines dans deux fuseaux produisent des lignes comparables. Mais un
+# horodatage UTC affiché tel quel se lit comme une heure locale fausse : c'est
+# la conversion ci-dessous qui manquait.
+
+
+def utc_now_iso() -> str:
+    """Horodatage courant en UTC, format ISO suffixé « Z »."""
+    # datetime.utcnow() est déprécié depuis Python 3.12 : il renvoyait un
+    # datetime naïf auquel on recollait un « Z » à la main, soit une
+    # affirmation de fuseau que rien ne garantissait. Ici le datetime connaît
+    # réellement le sien.
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def to_local_display(timestamp: str, fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """Rend un horodatage stocké lisible dans le fuseau de la machine.
+
+    Un horodatage sans fuseau est supposé UTC : c'est ce que le code écrivait
+    avant, et l'historique déjà sur disque en est plein.
+    """
+    try:
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError):
+        # Ligne abîmée : mieux vaut l'afficher brute que faire échouer !history.
+        return str(timestamp)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone().strftime(fmt)
 
 
 # Charge .env une seule fois, au moment de l'import du module.

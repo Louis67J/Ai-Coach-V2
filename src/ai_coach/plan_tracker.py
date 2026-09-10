@@ -5,12 +5,12 @@ et permet de les comparer avec les séances réalisées.
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import date
 from typing import Any
 
 from pathlib import Path
 
-from ai_coach.config import athlete_path
+from ai_coach.config import athlete_path, utc_now_iso
 
 
 def plans_path() -> Path:
@@ -30,7 +30,7 @@ def save_plan(
     l'adhérence et de projeter la forme, le texte seul n'étant pas analysable.
     """
     entry = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": utc_now_iso(),
         "start_date": start_date,
         "days": days,
         "plan_text": plan_text,

@@ -9,12 +9,12 @@ import logging
 
 import json
 from collections.abc import Callable
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 import requests
 
-from ai_coach.config import athlete_path, load_config
+from ai_coach.config import athlete_path, load_config, utc_now_iso
 
 
 logger = logging.getLogger(__name__)
@@ -84,7 +84,7 @@ def refresh_cache(
 
     # Ajoute un petit wrapper avec des métadonnées
     payload = {
-        "fetched_at": datetime.utcnow().isoformat() + "Z",
+        "fetched_at": utc_now_iso(),
         "start": start.isoformat(),
         "end": end.isoformat(),
         "count": len(activities),

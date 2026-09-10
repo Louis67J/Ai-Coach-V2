@@ -22,11 +22,10 @@ from __future__ import annotations
 import logging
 
 import json
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ai_coach.config import athlete_path
+from ai_coach.config import athlete_path, to_local_display, utc_now_iso
 
 
 logger = logging.getLogger(__name__)
@@ -57,7 +56,7 @@ def append_exchange(
         return
 
     entry = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": utc_now_iso(),
         "source": source,
         "question": question,
         "answer": answer,
@@ -207,7 +206,9 @@ def format_recent_for_display(limit: int = 5) -> str:
 
     lines = []
     for i, ex in enumerate(exchanges, 1):
-        ts = ex.get("timestamp", "?")[:19].replace("T", " ")
+        # Stocké en UTC, lu par un humain : on repasse dans son fuseau,
+        # sinon un échange de 12h08 s'affiche à 10h08.
+        ts = to_local_display(ex.get("timestamp", "?"))
         src = ex.get("source", "?")
         q = ex.get("question", "")
         a = ex.get("answer", "")
@@ -254,7 +255,7 @@ def summarize_old_exchanges(
         old_text_parts.append(f"Résumé précédent des conversations anciennes :\n{existing_summary}\n")
     old_text_parts.append("Nouveaux échanges à intégrer au résumé :")
     for ex in old_exchanges:
-        ts = ex.get("timestamp", "?")[:10]
+        ts = to_local_display(ex.get("timestamp", "?"), "%Y-%m-%d")
         old_text_parts.append(f"[{ts}] Question: {ex['question'][:200]}")
         old_text_parts.append(f"[{ts}] Réponse: {ex['answer'][:300]}")
 

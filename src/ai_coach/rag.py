@@ -14,11 +14,10 @@ import logging
 
 import json
 import hashlib
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ai_coach.config import athlete_path
+from ai_coach.config import athlete_path, utc_now_iso
 
 
 logger = logging.getLogger(__name__)
@@ -77,7 +76,7 @@ def index_exchange(
     Indexe un échange dans la base vectorielle.
     Le texte combiné (question + réponse résumée) est vectorisé.
     """
-    ts = timestamp or (datetime.utcnow().isoformat() + "Z")
+    ts = timestamp or utc_now_iso()
     doc_id = _make_id(question, ts)
 
     # Le document indexé = question + début de réponse (pour le contexte sémantique)
