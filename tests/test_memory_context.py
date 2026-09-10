@@ -66,3 +66,4 @@ def test_les_questions_ne_sont_jamais_tronquees():
 def test_compaction_declenchee_avant_que_lhistorique_ne_gonfle():
     """Le seuil doit rester au-dessus de ce qu'on garde, sinon rien n'est jamais résumé."""
     assert SUMMARY_TRIGGER > KEEP_RECENT_EXCHANGES
+

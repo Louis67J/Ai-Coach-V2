@@ -50,6 +50,12 @@ def append_exchange(
         source: "discord" ou "cli" (ou autre canal futur)
         metadata: infos contextuelles libres (utilisateur, salon, etc.)
     """
+    # Une réponse vide (appel coupé, erreur) n'apporte aucune continuité et
+    # pollue durablement l'historique rejoué à chaque appel suivant.
+    if not (answer or "").strip():
+        logger.warning("Échange non mémorisé : réponse vide pour %r", question[:60])
+        return
+
     entry = {
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "source": source,
@@ -120,8 +126,16 @@ def to_anthropic_messages(exchanges: list[dict[str, Any]]) -> list[dict[str, str
     """
     messages = []
     for ex in exchanges:
-        messages.append({"role": "user", "content": ex["question"]})
-        messages.append({"role": "assistant", "content": _shorten_answer(ex["answer"])})
+        question = (ex.get("question") or "").strip()
+        answer = (ex.get("answer") or "").strip()
+        # Un échange sans réponse ne dit rien au coach, et un bloc de texte
+        # vide fait rejeter toute la requête par l'API (400 sur un contenu
+        # vide, et plus encore s'il porte un marqueur de cache). Un seul
+        # échange abîmé bloquerait alors chaque appel suivant.
+        if not question or not answer:
+            continue
+        messages.append({"role": "user", "content": question})
+        messages.append({"role": "assistant", "content": _shorten_answer(answer)})
     return messages
 
 

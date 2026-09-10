@@ -631,7 +631,7 @@ def _build_calendar_window(profile: dict[str, Any], days_ahead: int = 14) -> str
 def ask_coach(
     question: str,
     report: dict[str, Any],
-    max_tokens: int = 3000,
+    max_tokens: int = 12000,
     source: str = "cli",
     metadata: dict[str, Any] | None = None,
     history_limit: int = KEEP_RECENT_EXCHANGES,
@@ -713,7 +713,9 @@ def ask_coach(
     # C'est ce troisième qui pèse le plus : une génération de plan enchaîne
     # 5 requêtes qui réexpédient toutes le même contexte.
     messages: list[dict[str, Any]] = [dict(m) for m in history_messages]
-    if messages:
+    # L'API rejette un marqueur de cache sur un bloc vide : on ne le pose que
+    # si le dernier message porte réellement du texte.
+    if messages and (messages[-1].get("content") or "").strip():
         last = messages[-1]
         messages[-1] = {
             "role": last["role"],
@@ -804,6 +806,21 @@ def ask_coach(
     # --- Extraction de la réponse finale ---
     parts = [block.text for block in response.content if block.type == "text"]
     answer = "\n".join(parts).strip()
+
+    # Le budget de sortie a été épuisé : la réponse s'arrête en plein milieu.
+    # Sur Sonnet 5 la réflexion adaptative consomme ce même budget, donc une
+    # réponse peut même revenir entièrement vide. Sans ce signal, l'interface
+    # affiche un texte tronqué ou rien du tout, et le coach paraît figé.
+    if response.stop_reason == "max_tokens":
+        logger.warning(
+            "Réponse coupée : budget de %d tokens de sortie épuisé (%d produits)",
+            max_tokens, response.usage.output_tokens,
+        )
+        avertissement = (
+            "\n\n---\n⚠️ *Réponse interrompue : le budget de sortie a été atteint. "
+            "Repose la question de façon plus ciblée, ou demande la suite.*"
+        )
+        answer = (answer + avertissement) if answer else avertissement.strip()
 
     # Sauvegarde en mémoire
     if persist:
@@ -900,7 +917,7 @@ def generate_plan(
     )
     raw_answer = ask_coach(
         question, report,
-        max_tokens=4000,
+        max_tokens=16000,
         source=source,
         metadata=metadata,
     )
@@ -922,7 +939,7 @@ def generate_plan(
 async def ask_coach_async(
     question: str,
     report: dict[str, Any],
-    max_tokens: int = 3000,
+    max_tokens: int = 12000,
     source: str = "discord",
     metadata: dict[str, Any] | None = None,
     history_limit: int = KEEP_RECENT_EXCHANGES,
