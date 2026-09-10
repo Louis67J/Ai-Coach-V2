@@ -89,6 +89,22 @@ def load_recent_exchanges(limit: int = 20) -> list[dict[str, Any]]:
     return exchanges[-limit:]
 
 
+# Combien d'échanges rejouer mot pour mot, et à partir de quel volume
+# compacter les plus anciens dans le résumé long terme.
+#
+# L'historique est ce qui pèse le plus dans chaque appel : à ~320 tokens
+# l'échange médian, en garder 15 revient à réexpédier ~14 000 tokens à
+# chaque question. Le résumé long terme existe précisément pour porter
+# l'ancien contexte à moindre coût.
+KEEP_RECENT_EXCHANGES = 8
+SUMMARY_TRIGGER = 14
+
+# Les réponses très longues sont des plans d'entraînement. Le texte complet
+# vit déjà dans plans.jsonl et le coach peut le relire via get_plan_followup :
+# le rejouer intégralement à chaque appel coûte cher pour rien.
+MAX_REPLAYED_ANSWER_CHARS = 1500
+
+
 def to_anthropic_messages(exchanges: list[dict[str, Any]]) -> list[dict[str, str]]:
     """
     Convertit une liste d'échanges en format messages pour l'API Anthropic.
@@ -105,8 +121,24 @@ def to_anthropic_messages(exchanges: list[dict[str, Any]]) -> list[dict[str, str
     messages = []
     for ex in exchanges:
         messages.append({"role": "user", "content": ex["question"]})
-        messages.append({"role": "assistant", "content": ex["answer"]})
+        messages.append({"role": "assistant", "content": _shorten_answer(ex["answer"])})
     return messages
+
+
+def _shorten_answer(answer: str) -> str:
+    """
+    Raccourcit une réponse trop longue rejouée dans l'historique.
+
+    On le signale explicitement plutôt que de couper en silence : le coach
+    doit savoir qu'il a écrit davantage, et où retrouver le texte complet.
+    """
+    if len(answer) <= MAX_REPLAYED_ANSWER_CHARS:
+        return answer
+    return (
+        answer[:MAX_REPLAYED_ANSWER_CHARS].rstrip()
+        + "\n\n[…réponse tronquée dans l'historique. "
+        "S'il s'agit d'un plan, le texte complet est disponible via get_plan_followup.]"
+    )
 
 
 def count_exchanges() -> int:

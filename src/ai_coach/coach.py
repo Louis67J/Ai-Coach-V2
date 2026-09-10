@@ -19,6 +19,8 @@ from anthropic import Anthropic
 
 from ai_coach.config import load_config
 from ai_coach.memory import (
+    KEEP_RECENT_EXCHANGES,
+    SUMMARY_TRIGGER,
     append_exchange,
     load_memory_summary,
     load_recent_exchanges,
@@ -632,7 +634,7 @@ def ask_coach(
     max_tokens: int = 3000,
     source: str = "cli",
     metadata: dict[str, Any] | None = None,
-    history_limit: int = 20,
+    history_limit: int = KEEP_RECENT_EXCHANGES,
     persist: bool = True,
     light: bool = False,
     max_tool_rounds: int = 5,
@@ -664,7 +666,9 @@ def ask_coach(
         )
 
     # Mémoire long terme
-    summarize_old_exchanges(keep_recent=15, summary_trigger=25)
+    summarize_old_exchanges(
+        keep_recent=KEEP_RECENT_EXCHANGES, summary_trigger=SUMMARY_TRIGGER
+    )
     memory_summary = load_memory_summary()
     memory_text = ""
     if memory_summary:
@@ -921,7 +925,7 @@ async def ask_coach_async(
     max_tokens: int = 3000,
     source: str = "discord",
     metadata: dict[str, Any] | None = None,
-    history_limit: int = 20,
+    history_limit: int = KEEP_RECENT_EXCHANGES,
     persist: bool = True,
     light: bool = False,
 ) -> str:
