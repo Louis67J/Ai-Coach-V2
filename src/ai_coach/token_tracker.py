@@ -30,12 +30,23 @@ def log_usage(
     output_tokens: int,
     source: str = "cli",
     question_preview: str = "",
+    cache_creation_tokens: int = 0,
+    cache_read_tokens: int = 0,
 ) -> dict:
-    """Enregistre un appel API."""
+    """
+    Enregistre un appel API.
+
+    Les tokens de cache sont comptés séparément car ils ne coûtent pas le
+    même prix : écrire dans le cache coûte ~1,25x l'entrée normale, le relire
+    ~0,1x. Sans cette distinction, un appel largement servi par le cache
+    apparaîtrait aussi cher qu'un appel à froid.
+    """
     pricing = PRICING.get(model, DEFAULT_PRICING)
     cost_input = input_tokens / 1_000_000 * pricing["input"]
     cost_output = output_tokens / 1_000_000 * pricing["output"]
-    cost_total = cost_input + cost_output
+    cost_cache_write = cache_creation_tokens / 1_000_000 * pricing["input"] * 1.25
+    cost_cache_read = cache_read_tokens / 1_000_000 * pricing["input"] * 0.1
+    cost_total = cost_input + cost_output + cost_cache_write + cost_cache_read
 
     entry = {
         "timestamp": datetime.utcnow().isoformat() + "Z",
@@ -43,6 +54,8 @@ def log_usage(
         "model": model,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
+        "cache_creation_tokens": cache_creation_tokens,
+        "cache_read_tokens": cache_read_tokens,
         "cost_usd": round(cost_total, 6),
         "source": source,
         "question": question_preview[:80],

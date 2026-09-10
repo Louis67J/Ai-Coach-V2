@@ -696,9 +696,44 @@ def ask_coach(
         f"=== Ma question ===\n{question}"
     )
 
-    messages = history_messages + [
-        {"role": "user", "content": current_user_message}
-    ]
+    # --- Mise en cache du préfixe ---------------------------------------
+    #
+    # Le cache fonctionne par préfixe : tout ce qui précède un point de cache
+    # est réutilisé tant qu'il n'a pas changé d'un octet. On en pose trois,
+    # du plus stable au plus volatile, pour que chacun serve à une échelle
+    # différente :
+    #   1. système + outils  → identiques à chaque appel, toutes sessions
+    #   2. fin de l'historique → stable tant qu'aucun échange ne s'ajoute
+    #   3. fin du message de contexte → réutilisé par les tours d'outils du
+    #      même appel, qui renvoient tous ce bloc à l'identique
+    # C'est ce troisième qui pèse le plus : une génération de plan enchaîne
+    # 5 requêtes qui réexpédient toutes le même contexte.
+    messages: list[dict[str, Any]] = [dict(m) for m in history_messages]
+    if messages:
+        last = messages[-1]
+        messages[-1] = {
+            "role": last["role"],
+            "content": [{
+                "type": "text",
+                "text": last["content"],
+                "cache_control": {"type": "ephemeral"},
+            }],
+        }
+
+    messages.append({
+        "role": "user",
+        "content": [{
+            "type": "text",
+            "text": current_user_message,
+            "cache_control": {"type": "ephemeral"},
+        }],
+    })
+
+    system_blocks = [{
+        "type": "text",
+        "text": SYSTEM_PROMPT,
+        "cache_control": {"type": "ephemeral"},
+    }]
 
     # --- Boucle d'appel avec tool use ---
     client = _client()
@@ -711,7 +746,7 @@ def ask_coach(
                 response = client.messages.create(
                     model=DEFAULT_MODEL,
                     max_tokens=max_tokens,
-                    system=SYSTEM_PROMPT,
+                    system=system_blocks,
                     messages=messages,
                     tools=tools_to_use if tools_to_use else [],
                 )
@@ -732,6 +767,8 @@ def ask_coach(
                 output_tokens=response.usage.output_tokens,
                 source=source,
                 question_preview=question,
+                cache_creation_tokens=getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
+                cache_read_tokens=getattr(response.usage, "cache_read_input_tokens", 0) or 0,
             )
         # Si Claude ne demande pas d'outil, on a la réponse finale
         if response.stop_reason != "tool_use":
