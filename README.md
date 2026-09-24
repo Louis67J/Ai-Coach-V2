@@ -43,6 +43,20 @@ Pour y accéder depuis ton téléphone sur le même réseau :
 streamlit run src/ai_coach/web/app.py --server.address 0.0.0.0
 ```
 
+### Ouvrir l'app à d'autres athlètes
+
+Dans `.env`, mets `MULTI_USER=1` et une `APP_SECRET_KEY` (commande de
+génération dans `.env.example`). L'app web demande alors un compte, puis
+guide chaque nouvel utilisateur : ses clés API Claude et Intervals.icu
+(chiffrées sur le serveur, sa consommation Claude est facturée sur son propre
+compte Anthropic), un profil minimal, puis l'import de ses séances depuis la
+page **Données**.
+
+Chaque athlète a ses données dans `data/athletes/<identifiant>/` et ses
+graphes dans `outputs/athletes/<identifiant>/`. Les comptes (mots de passe
+hachés) sont dans `data/accounts.json`. Le bot Discord et la CLI restent
+mono-utilisateur.
+
 ### Bot Discord
 
 ```powershell
@@ -83,6 +97,7 @@ python -m pytest
 | `DISCORD_BOT_TOKEN`, `DISCORD_CHANNEL_ID` | Bot + salon du brief |
 | `BRIEF_HOUR`, `BRIEF_MINUTE` | Heure du brief quotidien |
 | `ANTHROPIC_MODEL` | Modèle utilisé (optionnel) |
+| `MULTI_USER`, `APP_SECRET_KEY` | App web multi-utilisateur (optionnel) |
 
 Le reste se règle depuis l'app, onglet **Profil** : FTP, poids, lieu actuel
 (la météo du coach suit ce lieu) et objectifs A/B/C.
@@ -96,6 +111,7 @@ src/ai_coach/
 ├── coach.py         appels au LLM + outils
 ├── brief.py         brief proactif (indépendant du canal)
 ├── profile.py       profil athlète, objectifs, localisation
+├── accounts.py      comptes et clés API chiffrées (multi-utilisateur)
 ├── plan_tracker.py  plans prescrits et adhérence
 ├── memory.py/rag.py mémoire conversationnelle
 ├── web/             dashboard Streamlit

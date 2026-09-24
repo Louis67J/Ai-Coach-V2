@@ -18,6 +18,9 @@ discord.py>=2.4.0
 # Config / env
 python-dotenv>=1.0.0
 
+# Chiffrement des clés API des utilisateurs (mode multi-utilisateur)
+cryptography>=42.0.0
+
 scipy>=1.13.0
 
 plotly>=5.22.0

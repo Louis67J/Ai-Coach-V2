@@ -19,7 +19,7 @@ import json
 
 from ai_coach.analysis import build_daily_tss, build_report, compute_fitness, compute_weekly_load, filter_usable
 from ai_coach.charts import plot_fitness, plot_sport_breakdown, plot_weekly_load
-from ai_coach.config import OUTPUTS_DIR
+from ai_coach.config import outputs_path
 
 from ai_coach.coach import ask_coach, generate_plan
 
@@ -138,7 +138,7 @@ def cmd_analyze() -> None:
             charts_generated.append(path.name)
 
     # Sauvegarde du rapport JSON
-    report_path = OUTPUTS_DIR / "report.json"
+    report_path = outputs_path("report.json")
     report_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2),
         encoding="utf-8",

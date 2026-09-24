@@ -6,8 +6,10 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from ai_coach.wellness import build_wellness_summary, fetch_wellness, load_cached_wellness
+from ai_coach.web._auth import require_athlete
 
 st.set_page_config(page_title="AI Coach — Bien-être", page_icon="🛌", layout="wide")
+require_athlete()
 st.title("🛌 Bien-être")
 
 col_days, col_btn = st.columns([3, 1])

@@ -14,8 +14,10 @@ from ai_coach.intervals import (
     refresh_cache,
 )
 from ai_coach.web._shared import invalidate_report_cache
+from ai_coach.web._auth import require_athlete
 
 st.set_page_config(page_title="AI Coach — Données", page_icon="🔄", layout="wide")
+require_athlete()
 st.title("🔄 Données")
 
 st.subheader("1. Récupérer les activités")

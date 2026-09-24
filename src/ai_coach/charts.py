@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 
-from ai_coach.config import OUTPUTS_DIR
+from ai_coach.config import outputs_path
 
 
 def plot_fitness(
@@ -125,7 +125,7 @@ def plot_fitness(
     fig.autofmt_xdate()
     fig.subplots_adjust(left=0.08, right=0.92, top=0.92, bottom=0.12)
 
-    path = OUTPUTS_DIR / filename
+    path = outputs_path(filename)
     plt.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return path
@@ -143,7 +143,7 @@ def plot_weekly_load(weekly_series: pd.Series, filename: str = "weekly_load.png"
     fig.autofmt_xdate()
     plt.tight_layout()
 
-    path = OUTPUTS_DIR / filename
+    path = outputs_path(filename)
     plt.savefig(path, dpi=120)
     plt.close(fig)
     return path
@@ -170,7 +170,7 @@ def plot_sport_breakdown(sport_breakdown: dict, filename: str = "sport_breakdown
     ax.set_title("Répartition par sport (heures)")
     plt.tight_layout()
 
-    path = OUTPUTS_DIR / filename
+    path = outputs_path(filename)
     plt.savefig(path, dpi=120)
     plt.close(fig)
     return path
@@ -349,7 +349,7 @@ def plot_session(
         date_str = session_summary.get("date", "unknown") if session_summary else "unknown"
         filename = f"session_{date_str}.png"
 
-    path = OUTPUTS_DIR / filename
+    path = outputs_path(filename)
     plt.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return path
@@ -517,7 +517,7 @@ def plot_power_curve(filename: str = "power_curve.png") -> Path | None:
 
     fig.subplots_adjust(left=0.08, right=0.95, top=0.93, bottom=0.08)
 
-    path = OUTPUTS_DIR / filename
+    path = outputs_path(filename)
     plt.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return path

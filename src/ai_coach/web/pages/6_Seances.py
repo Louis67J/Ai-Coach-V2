@@ -11,8 +11,10 @@ import streamlit as st
 
 from ai_coach.charts_interactive import build_session_fig
 from ai_coach.intervals import fetch_activity_streams, load_enriched_sessions
+from ai_coach.web._auth import require_athlete
 
 st.set_page_config(page_title="AI Coach — Séances", page_icon="🚵", layout="wide")
+require_athlete()
 st.title("🚵 Séances")
 
 sessions = load_enriched_sessions()

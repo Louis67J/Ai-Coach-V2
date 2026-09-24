@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
 
-from ai_coach.config import OUTPUTS_DIR
+from ai_coach.config import outputs_path
 
 
 def build_fitness_fig(
@@ -162,7 +162,7 @@ def plot_fitness_interactive(
     if fig is None:
         return None
 
-    path = OUTPUTS_DIR / filename
+    path = outputs_path(filename)
     fig.write_html(str(path), include_plotlyjs="cdn")
     return path
 
@@ -362,6 +362,6 @@ def plot_session_interactive(
         date_str = session_summary.get("date", "unknown") if session_summary else "unknown"
         filename = f"session_{date_str}_interactive.html"
 
-    path = OUTPUTS_DIR / filename
+    path = outputs_path(filename)
     fig.write_html(str(path), include_plotlyjs="cdn")
     return path

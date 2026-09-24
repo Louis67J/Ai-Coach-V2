@@ -31,7 +31,9 @@ def rag_dir() -> Path:
 
 # Singleton pour éviter de recharger le modèle à chaque appel
 _embedding_model = None
-_chroma_collection = None
+# Une collection par athlète : une seule globale renverrait à chacun la
+# mémoire du premier athlète qui l'a ouverte.
+_chroma_collections: dict[str, Any] = {}
 
 
 def _get_embedding_model():
@@ -47,16 +49,16 @@ def _get_embedding_model():
 
 
 def _get_collection():
-    """Récupère ou crée la collection ChromaDB."""
-    global _chroma_collection
-    if _chroma_collection is None:
+    """Récupère ou crée la collection ChromaDB de l'athlète courant."""
+    path = str(rag_dir())
+    if path not in _chroma_collections:
         import chromadb
-        client = chromadb.PersistentClient(path=str(rag_dir()))
-        _chroma_collection = client.get_or_create_collection(
+        client = chromadb.PersistentClient(path=path)
+        _chroma_collections[path] = client.get_or_create_collection(
             name="conversations",
             metadata={"description": "Échanges coach-athlète pour recherche sémantique"},
         )
-    return _chroma_collection
+    return _chroma_collections[path]
 
 
 def _make_id(text: str, timestamp: str) -> str:

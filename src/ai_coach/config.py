@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
@@ -67,23 +69,37 @@ def configure_logging(level: int = logging.INFO) -> None:
 
 # --- Athlète courant ---------------------------------------------------
 #
-# Tout est aujourd'hui mono-athlète, mais les chemins de données passent par
-# ici plutôt que d'être figés à l'import. C'est la seule couture nécessaire
-# pour qu'ouvrir l'app à quelqu'un d'autre ne demande pas de reprendre chaque
-# module : il suffira de positionner l'athlète courant en début de requête.
+# Les chemins de données passent par ici plutôt que d'être figés à l'import :
+# c'est la couture qui permet d'ouvrir l'app à d'autres athlètes sans
+# reprendre chaque module. Le point d'entrée positionne l'athlète courant en
+# début de requête.
+#
+# Une ContextVar plutôt qu'une globale : Streamlit sert chaque visiteur dans
+# son propre thread, et une globale ferait lire à l'un les données de l'autre
+# dès que deux pages se chargent en même temps.
 
 DEFAULT_ATHLETE = "me"
-_current_athlete = DEFAULT_ATHLETE
+_current_athlete: ContextVar[str] = ContextVar("current_athlete", default=DEFAULT_ATHLETE)
+
+# Un slug devient un nom de dossier : on n'accepte que ce qui ne peut pas
+# sortir de data/athletes/ (pas de « .. », pas de « / »).
+_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,31}$")
+
+
+def is_valid_slug(slug: str) -> bool:
+    return bool(slug) and bool(_SLUG_RE.match(slug))
 
 
 def current_athlete() -> str:
-    return _current_athlete
+    return _current_athlete.get()
 
 
 def set_current_athlete(slug: str) -> None:
     """Bascule l'athlète dont on lit/écrit les données."""
-    global _current_athlete
-    _current_athlete = slug or DEFAULT_ATHLETE
+    slug = slug or DEFAULT_ATHLETE
+    if slug != DEFAULT_ATHLETE and not is_valid_slug(slug):
+        raise ValueError(f"Identifiant d'athlète invalide : {slug!r}")
+    _current_athlete.set(slug)
 
 
 def athlete_data_dir(athlete: str | None = None) -> Path:
@@ -97,6 +113,8 @@ def athlete_data_dir(athlete: str | None = None) -> Path:
     athlete = athlete or current_athlete()
     if athlete == DEFAULT_ATHLETE:
         return DATA_DIR
+    if not is_valid_slug(athlete):
+        raise ValueError(f"Identifiant d'athlète invalide : {athlete!r}")
     path = DATA_DIR / "athletes" / athlete
     path.mkdir(parents=True, exist_ok=True)
     return path
@@ -105,6 +123,25 @@ def athlete_data_dir(athlete: str | None = None) -> Path:
 def athlete_path(filename: str, athlete: str | None = None) -> Path:
     """Chemin d'un fichier de données pour l'athlète courant."""
     return athlete_data_dir(athlete) / filename
+
+
+def outputs_path(filename: str, athlete: str | None = None) -> Path:
+    """
+    Chemin d'un fichier généré (graphe, rapport) pour l'athlète courant.
+
+    Même logique que les données : l'athlète par défaut garde `outputs/`,
+    les autres ont leur sous-dossier, pour qu'un graphe tracé pour l'un ne
+    soit jamais servi à l'autre.
+    """
+    athlete = athlete or current_athlete()
+    if athlete == DEFAULT_ATHLETE:
+        directory = OUTPUTS_DIR
+    else:
+        if not is_valid_slug(athlete):
+            raise ValueError(f"Identifiant d'athlète invalide : {athlete!r}")
+        directory = OUTPUTS_DIR / "athletes" / athlete
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / filename
 
 
 # Horodatage : on écrit en UTC, on affiche en heure locale.
@@ -181,9 +218,19 @@ class Config:
     discord_channel_id: str | None = None
 
 
+def multi_user_enabled() -> bool:
+    """Mode multi-utilisateur de l'app web (MULTI_USER=1 dans .env)."""
+    return os.getenv("MULTI_USER", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def load_config(require_discord: bool = False) -> Config:
     """
     Charge et valide la configuration.
+
+    L'athlète par défaut lit ses clés dans .env, comme avant. Tout autre
+    athlète utilise les clés qu'il a saisies lui-même dans l'app, stockées
+    chiffrées dans son dossier (voir accounts.py) : personne ne consomme les
+    clés du propriétaire de l'installation.
 
     Args:
         require_discord: si True, exige que les variables Discord soient
@@ -195,6 +242,25 @@ def load_config(require_discord: bool = False) -> Config:
     if require_discord:
         discord_token = _require("DISCORD_BOT_TOKEN")
         discord_channel = _require("DISCORD_CHANNEL_ID")
+
+    athlete = current_athlete()
+    if athlete != DEFAULT_ATHLETE:
+        # Import tardif : accounts importe ce module.
+        from ai_coach.accounts import load_credentials
+
+        creds = load_credentials(athlete)
+        if not creds:
+            raise RuntimeError(
+                "❌ Tes clés API ne sont pas encore renseignées. "
+                "Ajoute-les depuis la page Profil."
+            )
+        return Config(
+            anthropic_api_key=creds["anthropic_api_key"],
+            intervals_api_key=creds["intervals_api_key"],
+            intervals_athlete_id=creds["intervals_athlete_id"],
+            discord_bot_token=discord_token,
+            discord_channel_id=discord_channel,
+        )
 
     return Config(
         anthropic_api_key=_require("ANTHROPIC_API_KEY"),
