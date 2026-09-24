@@ -20,8 +20,10 @@ from ai_coach.web._shared import (
     invalidate_report_cache,
 )
 from ai_coach.workout import workout_from_plan_day
+from ai_coach.web._auth import require_athlete
 
 st.set_page_config(page_title="AI Coach — Plan", page_icon="📋", layout="wide")
+require_athlete()
 st.title("📋 Plan d'entraînement")
 
 report = get_report_or_stop()

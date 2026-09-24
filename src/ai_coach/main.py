@@ -19,7 +19,7 @@ import json
 
 from ai_coach.analysis import build_daily_tss, build_report, compute_fitness, compute_weekly_load, filter_usable
 from ai_coach.charts import plot_fitness, plot_sport_breakdown, plot_weekly_load
-from ai_coach.config import OUTPUTS_DIR
+from ai_coach.config import outputs_path
 
 from ai_coach.coach import ask_coach, generate_plan
 
@@ -138,7 +138,7 @@ def cmd_analyze() -> None:
             charts_generated.append(path.name)
 
     # Sauvegarde du rapport JSON
-    report_path = OUTPUTS_DIR / "report.json"
+    report_path = outputs_path("report.json")
     report_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -412,6 +412,62 @@ def cmd_metrics() -> None:
     if vo2:
         print(f"\n   🫁 VO2max estimée : {vo2:.1f} ml/kg/min")
 
+def cmd_claim_data(username: str) -> None:
+    """
+    Range les données de l'installation perso dans un compte du propriétaire.
+
+    Crée le compte s'il n'existe pas, déplace data/* dans
+    data/athletes/<compte>/ et y chiffre les clés de .env si APP_SECRET_KEY
+    est définie.
+    """
+    import getpass
+    import os
+
+    from ai_coach.accounts import (
+        AccountError,
+        account_exists,
+        create_account,
+        move_default_data_to,
+        normalize_username,
+        save_credentials,
+    )
+
+    slug = normalize_username(username)
+    try:
+        if account_exists(slug):
+            print(f"Compte « {slug} » déjà existant : on garde son mot de passe.")
+        else:
+            password = getpass.getpass(f"Mot de passe du compte « {slug} » : ")
+            if password != getpass.getpass("Confirme le mot de passe : "):
+                print("❌ Les deux mots de passe ne correspondent pas.")
+                sys.exit(1)
+            create_account(slug, password)
+            print(f"✅ Compte « {slug} » créé.")
+
+        moved = move_default_data_to(slug)
+    except AccountError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
+    print(f"✅ Déplacé dans data/athletes/{slug}/ : {', '.join(moved) or '(rien)'}")
+
+    if os.getenv("APP_SECRET_KEY"):
+        try:
+            config = load_config()
+            save_credentials(slug, {
+                "anthropic_api_key": config.anthropic_api_key,
+                "intervals_api_key": config.intervals_api_key,
+                "intervals_athlete_id": config.intervals_athlete_id,
+            })
+            print("✅ Clés de .env chiffrées dans le compte.")
+        except (RuntimeError, AccountError) as e:
+            print(f"⚠️ Clés non copiées : {e}")
+    else:
+        print("ℹ️ APP_SECRET_KEY absente : le compte continuera d'utiliser les clés de .env.")
+
+    print(f"\nDernière étape : ajoute OWNER_ATHLETE={slug} dans .env, pour que le bot, "
+          "la CLI et l'app retrouvent tes données.")
+
+
 def cmd_power_curve() -> None:
     """Génère le graphe de power curve."""
     from ai_coach.charts import plot_power_curve
@@ -464,6 +520,12 @@ def main() -> None:
 
     subparsers.add_parser("power_curve", help="Graphe de power curve")
 
+    claim_parser = subparsers.add_parser(
+        "claim-data",
+        help="Range tes données perso (data/) dans ton compte propriétaire",
+    )
+    claim_parser.add_argument("username", help="Identifiant du compte, ex: louis")
+
     args = parser.parse_args()
 
     if args.command == "check":
@@ -488,7 +550,9 @@ def main() -> None:
     elif args.command == "metrics":
         cmd_metrics()
     elif args.command == "power_curve":
-            cmd_power_curve()
+        cmd_power_curve()
+    elif args.command == "claim-data":
+        cmd_claim_data(args.username)
 
 if __name__ == "__main__":
     main()

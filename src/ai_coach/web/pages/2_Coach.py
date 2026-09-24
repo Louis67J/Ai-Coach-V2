@@ -6,8 +6,10 @@ import streamlit as st
 from ai_coach.coach import ask_coach
 from ai_coach.memory import load_recent_exchanges
 from ai_coach.web._shared import get_report_or_stop
+from ai_coach.web._auth import require_athlete
 
 st.set_page_config(page_title="AI Coach — Coach", page_icon="💬", layout="wide")
+require_athlete()
 st.title("💬 Coach")
 
 report = get_report_or_stop()

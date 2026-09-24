@@ -17,8 +17,11 @@ from ai_coach.profile import (
     update_field,
 )
 from ai_coach.weather import geocode
+from ai_coach.config import multi_user_enabled
+from ai_coach.web._auth import render_credentials_form, require_athlete
 
 st.set_page_config(page_title="AI Coach — Profil", page_icon="🧑", layout="wide")
+athlete_slug = require_athlete()
 st.title("🧑 Profil athlète")
 
 try:
@@ -239,3 +242,7 @@ with st.expander("➕ Ajouter un objectif"):
             }])
             st.success(f"Objectif ajouté : {new_name}")
             st.rerun()
+
+if multi_user_enabled():
+    st.divider()
+    render_credentials_form(athlete_slug)

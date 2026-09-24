@@ -43,6 +43,41 @@ def save_profile(profile: dict[str, Any]) -> None:
     )
 
 
+def new_profile(
+    name: str,
+    ftp_watts: int,
+    weight_kg: float,
+    fc_max: int | None = None,
+    base_location: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    Profil minimal d'un nouvel athlète, créé depuis l'app.
+
+    Juste ce qu'il faut pour que le coach raisonne (FTP, poids, lieu pour la
+    météo) : le reste — objectifs, contraintes, préférences — se complète
+    ensuite depuis la page Profil.
+    """
+    athlete: dict[str, Any] = {
+        "name": name,
+        "ftp_watts": int(ftp_watts),
+        "ftp_updated": date.today().isoformat(),
+        "weight_kg": weight_kg,
+    }
+    if fc_max:
+        athlete["fc_max"] = int(fc_max)
+    context: dict[str, Any] = {}
+    if base_location:
+        context["base_location"] = base_location["name"]
+        context["latitude"] = base_location["latitude"]
+        context["longitude"] = base_location["longitude"]
+    return {
+        "schema_version": 1,
+        "athlete": athlete,
+        "context": context,
+        OBJECTIVES_KEY: [],
+    }
+
+
 def update_field(path: list[str], value: Any) -> dict[str, Any]:
     """
     Met à jour un champ du profil via un chemin (liste de clés).

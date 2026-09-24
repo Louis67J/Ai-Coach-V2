@@ -20,8 +20,10 @@ from ai_coach.web._shared import (
     get_profile_safe,
     get_report_or_stop,
 )
+from ai_coach.web._auth import require_athlete
 
 st.set_page_config(page_title="AI Coach — Dashboard", page_icon="🚴", layout="wide")
+require_athlete()
 
 try:
     load_config()

@@ -949,9 +949,7 @@ async def ask_coach_async(
     import asyncio
     import functools
 
-    loop = asyncio.get_event_loop()
-    answer = await loop.run_in_executor(
-        None,
+    answer = await asyncio.to_thread(
         functools.partial(
             ask_coach,
             question=question,
@@ -977,9 +975,7 @@ async def generate_plan_async(
     import asyncio
     import functools
 
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None,
+    return await asyncio.to_thread(
         functools.partial(
             generate_plan,
             report=report,
