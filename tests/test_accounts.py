@@ -157,3 +157,53 @@ def test_sorties_separees_par_athlete():
 def test_masquage_des_cles():
     assert mask_secret("sk-ant-abcdefgh1234") == "sk-a…1234"
     assert "abcdefgh" not in mask_secret("sk-ant-abcdefgh1234")
+
+
+# --- Compte du propriétaire ------------------------------------------------
+
+
+def test_donnees_perso_rangees_dans_le_compte_proprietaire():
+    data = config.DATA_DIR
+    (data / "profile.json").write_text("{}", encoding="utf-8")
+    (data / "rag").mkdir()
+    create_account("louis", "motdepasse123")
+
+    moved = accounts.move_default_data_to("louis")
+
+    assert moved == ["profile.json", "rag"]
+    assert (data / "athletes" / "louis" / "profile.json").exists()
+    assert not (data / "profile.json").exists()
+    # L'annuaire des comptes reste à la racine
+    assert (data / "accounts.json").exists()
+
+
+def test_rangement_refuse_d_ecraser_des_donnees():
+    data = config.DATA_DIR
+    (data / "profile.json").write_text('{"new": 1}', encoding="utf-8")
+    target = data / "athletes" / "louis"
+    target.mkdir(parents=True)
+    (target / "profile.json").write_text('{"old": 1}', encoding="utf-8")
+
+    with pytest.raises(AccountError):
+        accounts.move_default_data_to("louis")
+    assert (data / "profile.json").exists()
+    assert (target / "profile.json").read_text(encoding="utf-8") == '{"old": 1}'
+
+
+def test_athlete_par_defaut_suit_le_proprietaire(monkeypatch):
+    monkeypatch.setenv("OWNER_ATHLETE", "louis")
+    assert athlete_data_dir(DEFAULT_ATHLETE) == config.DATA_DIR / "athletes" / "louis"
+    assert outputs_path("x.png", DEFAULT_ATHLETE).parent == config.OUTPUTS_DIR / "athletes" / "louis"
+
+
+def test_proprietaire_sans_cles_saisies_garde_celles_de_env(monkeypatch):
+    monkeypatch.setenv("OWNER_ATHLETE", "louis")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-owner")
+    monkeypatch.setenv("INTERVALS_API_KEY", "owner-key")
+    monkeypatch.setenv("INTERVALS_ATHLETE_ID", "i111")
+
+    set_current_athlete("louis")
+    assert load_config().anthropic_api_key == "sk-ant-owner"
+
+    save_credentials("louis", CREDS)
+    assert load_config().anthropic_api_key == CREDS["anthropic_api_key"]

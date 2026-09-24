@@ -102,6 +102,25 @@ def set_current_athlete(slug: str) -> None:
     _current_athlete.set(slug)
 
 
+def owner_athlete() -> str | None:
+    """
+    Compte du propriétaire de l'installation (OWNER_ATHLETE dans .env).
+
+    Une fois ses données rangées dans `data/athletes/<owner>/`, le bot, la
+    CLI et l'app mono-utilisateur doivent les y chercher : l'athlète par
+    défaut devient alors ce compte plutôt que la racine `data/`.
+    """
+    owner = (os.getenv("OWNER_ATHLETE") or "").strip().lower()
+    return owner if is_valid_slug(owner) else None
+
+
+def resolve_athlete(athlete: str) -> str:
+    """L'athlète par défaut désigne le propriétaire quand il a son compte."""
+    if athlete == DEFAULT_ATHLETE:
+        return owner_athlete() or DEFAULT_ATHLETE
+    return athlete
+
+
 def athlete_data_dir(athlete: str | None = None) -> Path:
     """
     Dossier de données d'un athlète.
@@ -110,7 +129,7 @@ def athlete_data_dir(athlete: str | None = None) -> Path:
     bougent pas, et rien ne change pour une installation mono-utilisateur.
     Tout autre athlète est isolé dans `data/athletes/<slug>/`.
     """
-    athlete = athlete or current_athlete()
+    athlete = resolve_athlete(athlete or current_athlete())
     if athlete == DEFAULT_ATHLETE:
         return DATA_DIR
     if not is_valid_slug(athlete):
@@ -133,7 +152,7 @@ def outputs_path(filename: str, athlete: str | None = None) -> Path:
     les autres ont leur sous-dossier, pour qu'un graphe tracé pour l'un ne
     soit jamais servi à l'autre.
     """
-    athlete = athlete or current_athlete()
+    athlete = resolve_athlete(athlete or current_athlete())
     if athlete == DEFAULT_ATHLETE:
         directory = OUTPUTS_DIR
     else:
@@ -227,10 +246,11 @@ def load_config(require_discord: bool = False) -> Config:
     """
     Charge et valide la configuration.
 
-    L'athlète par défaut lit ses clés dans .env, comme avant. Tout autre
-    athlète utilise les clés qu'il a saisies lui-même dans l'app, stockées
-    chiffrées dans son dossier (voir accounts.py) : personne ne consomme les
-    clés du propriétaire de l'installation.
+    L'athlète par défaut lit ses clés dans .env, comme avant ; le
+    propriétaire (OWNER_ATHLETE) aussi tant qu'il n'en a pas saisi d'autres.
+    Tout autre athlète utilise les clés qu'il a saisies lui-même dans l'app,
+    stockées chiffrées dans son dossier (voir accounts.py) : personne ne
+    consomme les clés du propriétaire de l'installation.
 
     Args:
         require_discord: si True, exige que les variables Discord soient
@@ -243,24 +263,26 @@ def load_config(require_discord: bool = False) -> Config:
         discord_token = _require("DISCORD_BOT_TOKEN")
         discord_channel = _require("DISCORD_CHANNEL_ID")
 
-    athlete = current_athlete()
+    athlete = resolve_athlete(current_athlete())
     if athlete != DEFAULT_ATHLETE:
         # Import tardif : accounts importe ce module.
         from ai_coach.accounts import load_credentials
 
         creds = load_credentials(athlete)
-        if not creds:
+        if creds:
+            return Config(
+                anthropic_api_key=creds["anthropic_api_key"],
+                intervals_api_key=creds["intervals_api_key"],
+                intervals_athlete_id=creds["intervals_athlete_id"],
+                discord_bot_token=discord_token,
+                discord_channel_id=discord_channel,
+            )
+        # Seul le propriétaire peut retomber sur les clés de .env.
+        if athlete != owner_athlete():
             raise RuntimeError(
                 "❌ Tes clés API ne sont pas encore renseignées. "
                 "Ajoute-les depuis la page Profil."
             )
-        return Config(
-            anthropic_api_key=creds["anthropic_api_key"],
-            intervals_api_key=creds["intervals_api_key"],
-            intervals_athlete_id=creds["intervals_athlete_id"],
-            discord_bot_token=discord_token,
-            discord_channel_id=discord_channel,
-        )
 
     return Config(
         anthropic_api_key=_require("ANTHROPIC_API_KEY"),

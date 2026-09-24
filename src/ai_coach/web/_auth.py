@@ -22,7 +22,7 @@ from ai_coach.accounts import (
     mask_secret,
     save_credentials,
 )
-from ai_coach.config import DEFAULT_ATHLETE, multi_user_enabled, set_current_athlete
+from ai_coach.config import DEFAULT_ATHLETE, multi_user_enabled, owner_athlete, set_current_athlete
 from ai_coach.profile import ProfileNotFoundError, load_profile, new_profile, save_profile
 from ai_coach.weather import geocode
 
@@ -43,7 +43,8 @@ def require_athlete() -> str:
     set_current_athlete(slug)
     _render_sidebar(slug)
 
-    if not has_credentials(slug):
+    # Le propriétaire peut rester sur les clés de .env.
+    if not has_credentials(slug) and slug != owner_athlete():
         _render_onboarding_header(step=1)
         render_credentials_form(slug)
         st.stop()

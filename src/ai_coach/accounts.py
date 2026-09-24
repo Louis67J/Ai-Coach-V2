@@ -20,6 +20,7 @@ import hmac
 import json
 import os
 import secrets
+import shutil
 import threading
 from pathlib import Path
 from typing import Any
@@ -130,6 +131,43 @@ def authenticate(username: str, password: str) -> str | None:
     if _check_password(password or "", account.get("password_hash", "")):
         return slug
     return None
+
+
+def account_exists(username: str) -> bool:
+    return normalize_username(username) in _load_accounts()
+
+
+# --- Données du propriétaire ----------------------------------------------
+
+# Ce qui reste à la racine de data/ : l'annuaire des comptes, pas des données
+# d'athlète.
+_SHARED_DATA_ENTRIES = {"athletes", "accounts.json", "accounts.json.tmp"}
+
+
+def move_default_data_to(slug: str) -> list[str]:
+    """
+    Range les données de l'installation mono-utilisateur (racine de data/)
+    dans le dossier du compte `slug`, et renvoie les noms déplacés.
+
+    Refuse d'écraser quoi que ce soit : si le dossier cible contient déjà un
+    fichier du même nom, rien n'est déplacé.
+    """
+    if not is_valid_slug(slug) or slug == DEFAULT_ATHLETE:
+        raise AccountError(f"Identifiant invalide : {slug!r}")
+    target = DATA_DIR / "athletes" / slug
+    entries = sorted(
+        e for e in DATA_DIR.iterdir() if e.name not in _SHARED_DATA_ENTRIES
+    ) if DATA_DIR.exists() else []
+    clashes = [e.name for e in entries if (target / e.name).exists()]
+    if clashes:
+        raise AccountError(
+            f"Le dossier {target} contient déjà : {', '.join(clashes)}. "
+            "Rien n'a été déplacé."
+        )
+    target.mkdir(parents=True, exist_ok=True)
+    for entry in entries:
+        shutil.move(str(entry), str(target / entry.name))
+    return [e.name for e in entries]
 
 
 # --- Clés API chiffrées --------------------------------------------------
