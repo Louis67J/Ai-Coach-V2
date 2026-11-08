@@ -27,7 +27,7 @@ class IntervalsClient:
     """Client minimal pour l'API Intervals.icu."""
 
     def __init__(self) -> None:
-        config = load_config()
+        config = load_config(require_anthropic=False)
         self.base_url = config.intervals_base_url
         self.athlete_id = config.intervals_athlete_id
         # Intervals.icu utilise Basic Auth : username "API_KEY" + password = la clé

@@ -148,7 +148,9 @@ load_dotenv()
 # Racine du projet (= le dossier qui contient pyproject.toml)
 # __file__ est src/ai_coach/config.py → on remonte de 3 niveaux
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = PROJECT_ROOT / "data"
+# AI_COACH_DATA_DIR permet de garder les données hors du dépôt (ex. le
+# dossier partagé d'un projet Claude) sans rien changer pour l'app.
+DATA_DIR = Path(os.getenv("AI_COACH_DATA_DIR") or PROJECT_ROOT / "data").expanduser()
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 
 
@@ -168,12 +170,13 @@ def _require(var_name: str) -> str:
 class Config:
     """Configuration complète de l'application, chargée depuis .env."""
 
-    # Anthropic
-    anthropic_api_key: str
-
     # Intervals.icu
     intervals_api_key: str
     intervals_athlete_id: str  # format: "i123456"
+
+    # Anthropic (None quand seul l'accès Intervals.icu est demandé)
+    anthropic_api_key: str | None = None
+
     intervals_base_url: str = "https://intervals.icu/api/v1"
 
     # Discord (optionnel pour l'instant — on ne force pas leur présence)
@@ -181,13 +184,15 @@ class Config:
     discord_channel_id: str | None = None
 
 
-def load_config(require_discord: bool = False) -> Config:
+def load_config(require_discord: bool = False, require_anthropic: bool = True) -> Config:
     """
     Charge et valide la configuration.
 
     Args:
         require_discord: si True, exige que les variables Discord soient
                          définies. Utile quand on lance le bot.
+        require_anthropic: False pour ce qui ne parle qu'à Intervals.icu
+                           (client API, outils du coach en projet Claude).
     """
     discord_token = os.getenv("DISCORD_BOT_TOKEN")
     discord_channel = os.getenv("DISCORD_CHANNEL_ID")
@@ -197,7 +202,9 @@ def load_config(require_discord: bool = False) -> Config:
         discord_channel = _require("DISCORD_CHANNEL_ID")
 
     return Config(
-        anthropic_api_key=_require("ANTHROPIC_API_KEY"),
+        anthropic_api_key=(
+            _require("ANTHROPIC_API_KEY") if require_anthropic else os.getenv("ANTHROPIC_API_KEY")
+        ),
         intervals_api_key=_require("INTERVALS_API_KEY"),
         intervals_athlete_id=_require("INTERVALS_ATHLETE_ID"),
         discord_bot_token=discord_token,
