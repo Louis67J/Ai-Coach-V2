@@ -88,3 +88,29 @@ def test_rattrapage_a_l_heure_pile():
     from datetime import datetime
 
     assert brief.missed_today(7, 0, now=datetime(2026, 8, 28, 7, 0)) is True
+
+
+def test_heure_du_brief_suit_tz(monkeypatch):
+    """
+    discord.py lit une heure sans fuseau comme de l'UTC : sur un serveur en
+    UTC, le brief de 7 h partirait à 8 h ou 9 h à Paris.
+    """
+    from datetime import datetime
+
+    monkeypatch.setenv("TZ", "Europe/Paris")
+    t = brief.brief_time(7, 30)
+    assert (t.hour, t.minute) == (7, 30)
+    assert t.tzinfo is not None
+    # Le fuseau nommé suit l'heure d'été, contrairement à un décalage fixe
+    assert t.tzinfo.utcoffset(datetime(2026, 1, 15)).total_seconds() == 3600
+    assert t.tzinfo.utcoffset(datetime(2026, 7, 15)).total_seconds() == 7200
+
+
+def test_heure_du_brief_sans_tz_garde_un_fuseau(monkeypatch):
+    monkeypatch.delenv("TZ", raising=False)
+    assert brief.brief_time(7).tzinfo is not None
+
+
+def test_tz_inconnu_ne_casse_pas_le_bot(monkeypatch):
+    monkeypatch.setenv("TZ", "Pas/UnFuseau")
+    assert brief.brief_time(7).tzinfo is not None

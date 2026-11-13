@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date
+import os
+from datetime import date, datetime, time as dt_time, tzinfo
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +58,31 @@ def should_send(kind: str = "daily", today: str | None = None) -> bool:
     """
     today = today or date.today().isoformat()
     return last_brief_date(kind) != today
+
+
+def local_timezone() -> tzinfo:
+    """
+    Fuseau de la machine, pour planifier le brief à l'heure locale.
+
+    discord.py lit une heure sans fuseau comme de l'UTC : sur un serveur,
+    `BRIEF_HOUR=7` partirait à 8 h ou 9 h à Paris. On prend `TZ` quand il
+    est défini (le conteneur le règle, et le passage à l'heure d'été suit),
+    sinon le décalage local actuel.
+    """
+    name = (os.getenv("TZ") or "").strip()
+    if name:
+        try:
+            from zoneinfo import ZoneInfo
+
+            return ZoneInfo(name)
+        except Exception:  # fuseau inconnu ou base absente : on se rabat
+            logger.warning("Fuseau TZ=%r inconnu, heure locale utilisée", name)
+    return datetime.now().astimezone().tzinfo
+
+
+def brief_time(hour: int, minute: int = 0) -> dt_time:
+    """Heure d'envoi du brief, rattachée au fuseau local."""
+    return dt_time(hour, minute, tzinfo=local_timezone())
 
 
 def missed_today(

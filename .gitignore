@@ -26,3 +26,5 @@ outputs/
 # OS
 .DS_Store
 Thumbs.db
+# Sauvegardes locales du serveur (deploy/backup.sh)
+backups/

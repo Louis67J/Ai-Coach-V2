@@ -1,0 +1,57 @@
+# Mise en ligne sur le serveur : voir docs/DEPLOIEMENT.md, étape 3.
+#
+#   docker compose up -d --build        # démarrer / mettre à jour
+#   docker compose logs -f web bot      # suivre les logs
+#
+# data/ et outputs/ restent sur le disque du serveur, à côté de ce fichier :
+# rebuild ou redémarrage ne les touchent pas.
+
+x-app: &app
+  build: .
+  image: ai-coach:latest
+  env_file: .env
+  environment:
+    TZ: ${TZ:-Europe/Paris}
+  volumes:
+    - ./data:/app/data
+    - ./outputs:/app/outputs
+  restart: unless-stopped
+
+services:
+  web:
+    <<: *app
+    expose:
+      - "8501"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  bot:
+    <<: *app
+    command: ["python", "-m", "ai_coach.main", "bot"]
+    # Un seul bot à la fois : arrêter celui du PC avant de lancer celui-ci.
+    profiles: ["bot"]
+
+  caddy:
+    image: caddy:2
+    depends_on:
+      - web
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      # Sans DOMAIN, Caddy sert https://localhost avec un certificat local
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

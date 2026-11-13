@@ -988,7 +988,13 @@ async def send_daily_brief(force: bool = False) -> bool:
     return True
 
 
-@tasks.loop(time=dt.time(hour=BRIEF_HOUR, minute=BRIEF_MINUTE))
+def _brief_loop_time() -> dt.time:
+    from ai_coach.brief import brief_time
+
+    return brief_time(BRIEF_HOUR, BRIEF_MINUTE)
+
+
+@tasks.loop(time=_brief_loop_time())
 async def daily_brief() -> None:
     try:
         await send_daily_brief()
