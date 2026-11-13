@@ -45,39 +45,57 @@ RAM (le modèle d'embedding de la mémoire du coach charge PyTorch).
 
 Recommandation : un VPS Hetzner en Allemagne ou en Finlande, avec Docker.
 
-## 3. Conteneuriser (dans le dépôt)
+## 3. Conteneuriser (fait, dans le dépôt)
 
-- `Dockerfile` : image Python 3.12 slim, `pip install -r requirements.txt`,
-  modèle d'embedding téléchargé au build pour ne pas le refaire à chaque
-  démarrage.
-- `docker-compose.yml` avec trois services qui partagent le volume `data/` :
-  - `web` : `streamlit run src/ai_coach/web/app.py --server.address 0.0.0.0` ;
-  - `bot` : `python -m ai_coach.main bot`, `restart: unless-stopped` ;
-  - `caddy` : reverse proxy, certificat HTTPS automatique.
+- `Dockerfile` : Python 3.12 slim, PyTorch en version CPU (pas de CUDA
+  inutile), modèle d'embedding téléchargé au build. L'app tourne avec un
+  utilisateur non-root.
+- `docker-compose.yml`, trois services qui partagent `data/` et `outputs/`
+  (dossiers du serveur, à côté du fichier, jamais dans l'image) :
+  - `web` : le dashboard Streamlit, joignable seulement via Caddy ;
+  - `bot` : le bot Discord, dans le profil `bot` (démarré seulement si on le
+    demande, pour ne pas avoir deux bots tant que celui du PC tourne) ;
+  - `caddy` : HTTPS automatique pour `DOMAIN`, configuré dans
+    `deploy/Caddyfile`.
 - `.env` sur le serveur uniquement : `MULTI_USER=1`, `APP_SECRET_KEY`,
-  `OWNER_ATHLETE=louis`, tes clés et celles de Discord.
-- Fuseau horaire du conteneur réglé sur `Europe/Paris` pour l'heure du brief.
+  `OWNER_ATHLETE=louis`, `DOMAIN`, `TZ=Europe/Paris`, tes clés et celles de
+  Discord.
+- Le brief suit `TZ` : `BRIEF_HOUR=7` part à 7 h heure de Paris, heure d'été
+  comprise, même si le serveur est en UTC.
+
+Essai en local (Docker Desktop), sans HTTPS ni domaine :
+
+```sh
+docker compose build
+docker compose run --rm -p 8501:8501 web   # puis http://localhost:8501
+```
 
 ## 4. Mettre en ligne
 
-1. Acheter un nom de domaine (~10 €/an) et le pointer vers l'IP du VPS.
+1. Acheter un nom de domaine (~10 €/an) et le pointer vers l'IP du VPS
+   (enregistrement A). Caddy en a besoin pour obtenir le certificat.
 2. Sur le VPS : créer un utilisateur non-root, n'autoriser que la connexion
    SSH par clé, activer le pare-feu (ports 22, 80, 443) et les mises à jour
    de sécurité automatiques.
 3. Installer Docker, cloner le dépôt (privé : clé de déploiement GitHub),
-   déposer `.env`.
-4. Copier ton dossier `data/` depuis ton PC (`scp -r data/ serveur:…`).
-5. `docker compose up -d`, puis vérifier : connexion avec le compte `louis`,
-   tes données visibles, `!brief` sur Discord.
-6. Arrêter le bot sur ton PC, pour qu'il n'y ait qu'un seul bot.
+   déposer `.env` (copie de `.env.example`, remplie).
+4. Copier ton dossier `data/` depuis ton PC (`scp -r data/ serveur:…`), puis
+   le donner à l'utilisateur du conteneur : `sudo chown -R 1000:1000 data
+   outputs`.
+5. `docker compose up -d --build`, puis vérifier : `https://DOMAIN`,
+   connexion avec le compte `louis`, tes données visibles.
+6. Arrêter le bot sur ton PC, puis `docker compose --profile bot up -d` et
+   `!brief` sur Discord.
 
 ## 5. Tenir dans la durée
 
-- **Sauvegardes** : copie quotidienne du volume `data/` vers un stockage
-  externe (Hetzner Storage Box ou autre), en gardant 7 jours. Garder
+- **Sauvegardes** : `deploy/backup.sh` archive `data/` dans `backups/` et
+  garde 7 jours ; à lancer chaque nuit par cron (ligne prête dans le
+  script), puis à copier vers un stockage externe (Hetzner Storage Box ou
+  autre). Garder
   `APP_SECRET_KEY` à part : sans elle, les clés des utilisateurs sont
   illisibles.
-- **Mises à jour** : `git pull && docker compose up -d --build`. Plus tard,
+- **Mises à jour** : `git pull && docker compose --profile bot up -d --build`. Plus tard,
   une GitHub Action peut le faire à chaque merge sur `main`.
 - **Surveillance** : un check de disponibilité gratuit (UptimeRobot) sur
   l'URL, et `docker compose logs` en cas de souci.
@@ -101,7 +119,7 @@ Recommandation : un VPS Hetzner en Allemagne ou en Finlande, avec Docker.
 
 1. Dépôt en privé (toi, 1 minute).
 2. Ranger tes données (toi, sur ton PC, étape 1).
-3. Dockerfile et compose (dans le dépôt).
+3. ~~Dockerfile et compose (dans le dépôt).~~ Fait.
 4. Mise en ligne sur le VPS, pour toi seul.
 5. Session persistante, limite de connexion, RGPD.
 6. Premiers testeurs gratuits, puis paiement.

@@ -1,0 +1,19 @@
+# Ne jamais envoyer de secrets ni de données perso dans l'image
+.env
+.env.*
+!.env.example
+data/
+outputs/
+backups/
+
+.git/
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.log
+.idea/
+.vscode/
+*.bat

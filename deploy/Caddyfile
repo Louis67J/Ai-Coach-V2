@@ -1,0 +1,6 @@
+# Certificat HTTPS automatique (Let's Encrypt) pour DOMAIN, défini dans .env.
+# Le DNS du domaine doit pointer vers le serveur avant le premier démarrage.
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy web:8501
+}

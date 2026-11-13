@@ -113,6 +113,13 @@ python -m ai_coach.main power_curve
 python -m pytest
 ```
 
+## Sur un serveur (Docker)
+
+`docker compose up -d --build` lance le dashboard derrière Caddy (HTTPS
+automatique pour `DOMAIN`) ; `docker compose --profile bot up -d` ajoute le
+bot Discord. Les données restent dans `data/` sur le serveur. Pas à pas
+complet, choix d'hébergement et sauvegardes : `docs/DEPLOIEMENT.md`.
+
 ## Réglages utiles (`.env`)
 
 | Variable | Rôle |
